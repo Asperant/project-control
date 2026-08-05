@@ -1,0 +1,24 @@
+{
+  "name": "project-control",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Project Memory & Development Control Center — Stage 1 platform",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@11.15.0",
+  "engines": {
+    "node": ">=24.18.0 <25"
+  },
+  "scripts": {
+    "build": "pnpm -r --filter ./packages/... --filter ./apps/... run build",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r run test",
+    "test:unit": "pnpm -r run test:unit",
+    "test:integration": "pnpm --filter @project-control/control-api run test:integration",
+    "lint": "pnpm -r run lint",
+    "clean": "pnpm -r exec rm -rf dist .tsbuildinfo"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "@types/node": "26.1.2"
+  }
+}

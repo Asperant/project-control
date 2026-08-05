@@ -1,0 +1,145 @@
+# =============================================================================
+# Project Control host runner.
+#
+# Installed to /etc/systemd/system/project-control-runner.service.
+#
+# The unit is where most of the runner's confinement actually lives. The binary
+# refuses to run as root, but everything below is what stops a compromised
+# runner from reaching the rest of the host even as an unprivileged user.
+# =============================================================================
+
+[Unit]
+Description=Project Control host runner (Unix socket operation service)
+Documentation=file:///srv/project-control/docs/architecture.md
+After=network-online.target
+Wants=network-online.target
+# Not bound to docker.service: the runner must be able to report health even
+# when Docker is down — that is precisely when an operator needs it.
+# Give up after 5 failures in 60 s rather than restart-looping forever on a
+# genuine misconfiguration. StartLimit* belongs in [Unit], not [Service]: it
+# governs systemd's restart accounting for the unit as a whole.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+
+# --- Identity ---------------------------------------------------------------
+User=project-runner
+Group=project-control
+# Supplementary group that owns the socket. The Control API container joins the
+# same group, and that shared membership is the entire access-control mechanism.
+SupplementaryGroups=project-control
+
+# --- Runtime directory ------------------------------------------------------
+# systemd creates /run/project-control with this ownership and mode before the
+# service starts, and removes it on stop. Mode 0750 means the directory itself
+# is traversable only by the runner user and the project-control group.
+RuntimeDirectory=project-control
+RuntimeDirectoryMode=0750
+
+WorkingDirectory=/srv/project-control/runner
+
+ExecStart=/srv/project-control/runner/bin/project-control-runner \
+    --socket /run/project-control/runner.sock \
+    --socket-gid ${PC_CONTROL_GID} \
+    --working-dir /srv/project-control/runner \
+    --max-concurrent 4 \
+    --log-level info
+
+# Validates configuration before the service is considered started.
+ExecStartPre=/srv/project-control/runner/bin/project-control-runner \
+    --check \
+    --socket /run/project-control/runner.sock \
+    --socket-gid ${PC_CONTROL_GID} \
+    --working-dir /srv/project-control/runner
+
+EnvironmentFile=/srv/project-control/config/runner.env
+
+# --- Restart behaviour ------------------------------------------------------
+Restart=always
+RestartSec=5s
+
+TimeoutStartSec=30
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+# =============================================================================
+# Hardening
+#
+# Verify the effective result with:
+#     systemd-analyze security project-control-runner.service
+# =============================================================================
+
+# --- Privilege --------------------------------------------------------------
+NoNewPrivileges=yes
+# The runner needs no capability whatsoever: it binds a Unix socket, reads
+# /proc and calls sysinfo(2). All three work unprivileged.
+CapabilityBoundingSet=
+AmbientCapabilities=
+# Blocks setuid/setgid binaries from being executed at all.
+RestrictSUIDSGID=yes
+
+# --- Filesystem -------------------------------------------------------------
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# The only writable paths. Note what is absent: no /var/run/docker.sock, no
+# /etc, no other project's directory.
+ReadWritePaths=/srv/project-control/runner /srv/project-control/logs
+ReadOnlyPaths=/srv/project-control/config
+InaccessiblePaths=/srv/project-control/secrets /srv/project-control/data /srv/project-control/backups
+
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+
+# --- Devices ----------------------------------------------------------------
+PrivateDevices=yes
+DevicePolicy=closed
+
+# --- Network ----------------------------------------------------------------
+# The runner has no TCP listener and makes no outbound connection. Restricting
+# the address families to Unix only makes that structural: even a code change
+# that tried to open a socket would fail at the kernel.
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+PrivateNetwork=no
+# PrivateNetwork is left off because the runtime directory and socket are shared
+# with the container namespace via a bind mount, which requires the host netns.
+
+# --- Namespaces and execution ------------------------------------------------
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RemoveIPC=yes
+PrivateUsers=no
+UMask=0077
+
+# --- Syscall filtering ------------------------------------------------------
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @obsolete @mount @swap @reboot @raw-io @debug @clock @cpu-emulation @module
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+
+# --- Resource limits --------------------------------------------------------
+LimitNOFILE=1024
+LimitNPROC=64
+TasksMax=64
+MemoryMax=192M
+MemoryHigh=128M
+CPUQuota=50%
+
+# --- Logging ----------------------------------------------------------------
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pc-runner
+
+[Install]
+WantedBy=multi-user.target

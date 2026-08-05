@@ -1,0 +1,52 @@
+# =============================================================================
+# Static file server for the built web panel.
+#
+# Runs inside the `web` container on :8081, reachable only from Caddy on the
+# `application` network. This is a second, minimal Caddy instance rather than
+# nginx so the stack pulls one fewer base image.
+# =============================================================================
+
+{
+	auto_https off
+	admin off
+	http_port 8081
+
+	log {
+		output stdout
+		format json
+		level WARN
+	}
+}
+
+:8081 {
+	root * /srv/www
+
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	# Hashed asset filenames are immutable, so they can be cached hard. index.html
+	# must not be, or a deployed update would not be picked up.
+	@immutable path /assets/*
+	header @immutable Cache-Control "public, max-age=31536000, immutable"
+
+	@html path / /index.html
+	header @html Cache-Control "no-store, must-revalidate"
+
+	header {
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+
+	# The panel is a single-page app: unknown paths must return index.html so a
+	# deep link works, but a missing *asset* must 404 rather than silently return
+	# HTML with a JavaScript content type.
+	handle /assets/* {
+		file_server
+	}
+
+	handle {
+		try_files {path} /index.html
+		file_server
+	}
+}

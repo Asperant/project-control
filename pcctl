@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# =============================================================================
+# pcctl — the single entry point for every Project Control operation.
+#
+#   ./pcctl <command> [options]
+#   ./pcctl help
+#
+# Commands that modify the host (install, start, stop, update, uninstall, and
+# the configure-* checkpoints) require root and say so rather than silently
+# re-executing under sudo — an operator should always know when they are about
+# to run something privileged.
+# =============================================================================
+set -Eeuo pipefail
+
+PCCTL_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export PC_REPO_ROOT="$PCCTL_DIR"
+
+# shellcheck source=scripts/lib/common.sh
+source "${PCCTL_DIR}/scripts/lib/common.sh"
+
+usage() {
+  cat >&2 <<'PCCTL_USAGE'
+Project Control — Stage 1
+
+USAGE
+  ./pcctl <command> [options]
+
+SETUP
+  preflight              Inspect the host. Read-only; changes nothing.
+  install                Create /srv/project-control, build images, start the stack.
+  create-admin           Create the first administrator account (interactive).
+
+LIFECYCLE
+  start                  Start the container stack.
+  stop                   Stop the container stack (data is preserved).
+  restart                Restart the container stack.
+  status                 Show container, runner and Tailscale status.
+  health                 Probe every component and report.
+  logs [service] [-f]    Show logs. Services: postgres db-bootstrap n8n control-api web caddy runner
+
+MANUAL CHECKPOINTS
+  configure-tailscale    Connect the tailnet and publish the portal (checkpoint 1).
+  configure-google-drive Authorise rclone against Google Drive (checkpoint 2).
+  configure-telegram     Store the bot token and chat id (checkpoint 3).
+
+BACKUP
+  backup [--check]       Run a backup now, or verify the repository.
+  restore-test           Restore the latest snapshot into an isolated sandbox.
+
+VERIFICATION
+  verify [--json]        Full functional verification.
+  verify-security [--json]  Security posture verification.
+
+MAINTENANCE
+  update                 Back up, pull pinned images, migrate, health-gate.
+  rollback               Return to the previous version lock and images.
+  uninstall              Remove the stack. Data is KEPT unless --delete-data.
+
+ENVIRONMENT
+  PC_ROOT                Deployment root (default: /srv/project-control)
+  PC_DEBUG=1             Verbose script output
+PCCTL_USAGE
+}
+
+run_script() {
+  local script="${PCCTL_DIR}/scripts/$1"; shift
+  [[ -f "$script" ]] || die "internal error: missing script $script"
+  exec bash "$script" "$@"
+}
+
+require_root_for() {
+  local command="$1"
+  if ! is_root; then
+    log_error "'${command}' modifies the host and must run as root."
+    log_info  "run: sudo ./pcctl ${command}"
+    exit 1
+  fi
+}
+
+command="${1:-help}"
+[[ $# -gt 0 ]] && shift || true
+
+case "$command" in
+  preflight)              run_script preflight.sh "$@" ;;
+
+  install)                require_root_for install
+                          run_script install.sh "$@" ;;
+
+  start|stop|restart|status|health|logs)
+                          run_script lifecycle.sh "$command" "$@" ;;
+
+  create-admin)           run_script create-admin.sh "$@" ;;
+
+  configure-tailscale)    require_root_for configure-tailscale
+                          run_script configure-tailscale.sh "$@" ;;
+  configure-google-drive) require_root_for configure-google-drive
+                          run_script configure-google-drive.sh "$@" ;;
+  configure-telegram)     require_root_for configure-telegram
+                          run_script configure-telegram.sh "$@" ;;
+
+  backup)                 require_root_for backup
+                          run_script backup.sh "$@" ;;
+  restore-test)           require_root_for restore-test
+                          run_script restore-test.sh "$@" ;;
+
+  verify)                 run_script verify.sh "$@" ;;
+  verify-security)        run_script verify-security.sh "$@" ;;
+
+  update)                 require_root_for update
+                          run_script update.sh "$@" ;;
+  rollback)               require_root_for rollback
+                          run_script rollback.sh "$@" ;;
+  uninstall)              require_root_for uninstall
+                          run_script uninstall.sh "$@" ;;
+
+  # Undocumented but useful: build images without installing.
+  build)                  run_script build.sh "$@" ;;
+
+  help|--help|-h)         usage; exit 0 ;;
+  version|--version|-v)   load_versions; printf 'project-control %s\n' "${PC_STACK_VERSION}"; exit 0 ;;
+
+  *)  log_error "unknown command: ${command}"
+      usage
+      exit 1 ;;
+esac

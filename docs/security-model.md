@@ -1,0 +1,298 @@
+# Security model
+
+Every control below is verified by `./pcctl verify-security`. The check ID in
+each row is what that command reports, so a claim here can always be traced to a
+command you can run.
+
+---
+
+## Threat model
+
+### In scope
+
+| Threat | Primary control |
+| --- | --- |
+| Internet-based attacker | No public exposure at all; access requires tailnet membership |
+| Compromised container | Non-root, no capabilities, read-only rootfs, no Docker socket, network segmentation |
+| Compromised runner | Unprivileged user, no exec path, systemd confinement, no sudo |
+| Stolen database dump | Sessions stored as hashes; passwords as Argon2id; backups encrypted before upload |
+| Stolen Google Drive backup | restic encryption with an operator-held passphrase |
+| Credential stuffing | Argon2id, per-IP rate limit, per-account lockout |
+| CSRF | `SameSite=Strict` + double-submit token + Origin check |
+| XSS session theft | `HttpOnly` cookie; CSRF token in memory, never in web storage |
+| Path traversal in artifacts | Paths derived from validated digests only |
+| Log/backup secret leakage | Structured redaction in API, runner and shell layers |
+| Audit tampering | No UPDATE/DELETE grant on `audit_events` |
+
+### Out of scope for Stage 1
+
+- A malicious operator with root on the host.
+- Physical access to unencrypted host disks (use full-disk encryption).
+- Compromise of the Tailscale coordination server.
+- Supply-chain compromise of a pinned upstream image *before* its digest was
+  recorded.
+
+---
+
+## 1. Network exposure
+
+**Claim: nothing is reachable from the public internet.**
+
+| Component | Host binding |
+| --- | --- |
+| caddy | `127.0.0.1:8780` |
+| n8n | `127.0.0.1:5678` |
+| postgres | none |
+| control-api | none |
+| web | none |
+| runner | none (Unix socket) |
+
+Reachability comes from Tailscale Serve, which terminates TLS on the tailnet
+interface. **Funnel is never used** — Funnel publishes to the public internet.
+`configure-tailscale` refuses to proceed if Funnel is enabled, and both verify
+scripts check for it.
+
+No router configuration, no port forwarding, no dynamic DNS, no Cloudflare, no
+domain.
+
+*Verified by:* `NET-001` … `NET-006`, `TS-004`.
+
+---
+
+## 2. Container isolation
+
+| Control | Applied to | Check |
+| --- | --- | --- |
+| Non-root user | all five | `HRD-004` |
+| `cap_drop: ALL`, no `cap_add` | all five | `HRD-003` |
+| `no-new-privileges:true` | all five | `HRD-002` |
+| Not privileged | all five | `HRD-001` |
+| Read-only root filesystem | all except postgres | `HRD-005` |
+| PID limit | all five | `HRD-006` |
+| Memory + CPU limit | all five | `HRD-007` |
+| Bounded logs (10 MiB × 5) | all five | `LOG-001` |
+| No host namespace | all five | `HRD-008` |
+| Healthcheck | all five | `CNT-002` |
+
+**PostgreSQL is the one documented read-only exception**: it must write its own
+data directory. Everything else it writes (`/tmp`, `/run/postgresql`) is
+redirected to `tmpfs`.
+
+**The Docker socket is mounted nowhere.** A container with `/var/run/docker.sock`
+can start a privileged container and is therefore equivalent to host root. The
+runner's user is also not in the `docker` group.
+
+*Verified by:* `DOC-001`, `DOC-002`.
+
+---
+
+## 3. Runner confinement
+
+The runner is the only component outside a container, so it carries the most
+layers.
+
+**Application level**
+
+- Refuses to start if uid or euid is 0.
+- No `os/exec` import anywhere in the binary.
+- The wire protocol has no command/argv/script/cwd/env field, and
+  `DisallowUnknownFields` rejects a request that invents one.
+- Operation lookup is an exact map hit on a compiled-in table — no case folding,
+  no trimming, no prefix matching. `/bin/sh`, `system.health; id` and
+  `SYSTEM.HEALTH` are all simply unknown.
+- Per-operation timeout, output cap, concurrency limit.
+- A panicking handler is recovered inside its own goroutine, so it cannot take
+  the service down.
+- Working directory must be absolute, must not be a symlink, must be writable.
+
+**systemd level**
+
+```
+User=project-runner              NoNewPrivileges=yes
+CapabilityBoundingSet=           (empty)
+ProtectSystem=strict             ProtectHome=yes
+PrivateTmp=yes                   PrivateDevices=yes
+RestrictAddressFamilies=AF_UNIX  IPAddressDeny=any
+MemoryDenyWriteExecute=yes       RestrictSUIDSGID=yes
+SystemCallFilter=@system-service ~@privileged @resources @mount @module …
+InaccessiblePaths=/srv/project-control/secrets /srv/project-control/data
+MemoryMax=192M  TasksMax=64  CPUQuota=50%
+```
+
+`RestrictAddressFamilies=AF_UNIX` is the one that makes "no TCP listener"
+structural rather than a promise: the kernel refuses the socket.
+
+**Access control**
+
+The socket is `0660`, owned `project-runner:project-control`. The Control API
+container joins that group via `group_add`. Group membership is the entire
+credential — there is no token, no password, no allowlist to get wrong.
+
+`verify-security` sends three hostile payloads (`/bin/sh`, a `command` field,
+`exec`) over the live socket and requires all three to be refused.
+
+*Verified by:* `RNR-001` … `RNR-007`.
+
+---
+
+## 4. Database isolation
+
+Six connect/deny combinations are asserted against the live cluster:
+
+| Role | `project_control` | `n8n` |
+| --- | --- | --- |
+| `control_app` | allowed | **must fail** |
+| `control_migrator` | allowed | **must fail** |
+| `n8n_app` | **must fail** | allowed |
+
+Plus, as `control_app`:
+
+- `DELETE FROM audit_events` must fail — the trail is append-only.
+- `UPDATE audit_events` must fail — history is immutable.
+- `CREATE TABLE` must fail — no DDL at runtime.
+- `backup_reader` `INSERT` must fail — read-only.
+
+These run as the real roles against the real schema, in both
+`verify-security` and the integration suite.
+
+*Verified by:* `PGS-001` … `PGS-006`.
+
+---
+
+## 5. Authentication
+
+| Control | Detail |
+| --- | --- |
+| Hashing | Argon2id, m=19456 KiB, t=2, p=1 (OWASP) |
+| Enumeration | Identical response and identical latency for unknown user vs wrong password |
+| Rate limit | 5 login attempts / 5 min per client IP |
+| Lockout | 10 consecutive failures locks the account for 15 min |
+| Session token | 256-bit random; **only SHA-256 is stored** |
+| Cookie | `HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/`, no `Domain` |
+| Expiry | 12 h absolute, 1 h idle (sliding) |
+| CSRF | Session-bound token in `x-csrf-token`, constant-time compare, plus Origin check |
+| Bootstrap | Interactive CLI only. No default account, no default password, no env var that creates one |
+| Audit | Every success, failure, lockout, rate-limit and CSRF rejection recorded |
+
+**Why the token hash matters.** `backup_reader` can dump `sessions`, and that
+dump goes to Google Drive. Storing the raw token would make every backup a
+bundle of live credentials.
+
+**Why the CSRF token is not in `localStorage`.** Web storage is readable by any
+script on the origin, so an XSS payload could read it — defeating the control it
+is meant to survive. It lives in a module variable and is re-fetched from
+`/api/auth/me` after a reload.
+
+---
+
+## 6. Secret management
+
+| Property | Implementation |
+| --- | --- |
+| Source of randomness | `/dev/urandom` |
+| Directory | `0700`, root-owned |
+| Files | `0600`, root-owned |
+| Per-service bundles | `0640`, group-readable by exactly that service |
+| Delivery | **file paths**, never environment variables |
+| Rotation | Never automatic; requires `--rotate <name>` |
+| n8n encryption key | Rotation refused outright — it would orphan every stored credential |
+| Repository | Only `.example` files; `secrets/` is gitignored and scanned |
+
+**Why files, not environment variables.** A process environment is readable via
+`/proc/<pid>/environ`, is included in `docker inspect`, leaks into crash dumps,
+and is inherited by children. A `0600` file bind-mounted read-only is none of
+those things.
+
+*Verified by:* `SEC-001` … `SEC-005`, `GIT-001` … `GIT-004`.
+
+---
+
+## 7. Secret leakage prevention
+
+Three independent layers, because logging is where secrets escape by accretion:
+
+1. **Control API** — pino `redact` covering cookies, authorization headers,
+   password/token/secret/key fields at any depth.
+2. **Audit trail** — `sanitiseDetail` strips forbidden keys regardless of case
+   or separator, truncates long strings, caps array length and recursion depth.
+3. **Runner** — `redact.String` matches `key=value` credential forms, URIs with
+   inline credentials, Telegram tokens, PEM blocks, PHC hashes and AWS key IDs;
+   `SanitiseLine` strips control characters and terminal escapes so a hostile
+   value cannot forge log entries.
+
+Shell scripts pipe third-party output through `redact_stream`. The API's error
+handler reports anything that is not a deliberate `AppError` as a bare
+`internal_error`, keeping driver messages — which routinely embed connection
+strings — out of HTTP responses.
+
+Integration tests assert that no password, hash or connection string appears in
+any response body or audit row.
+
+---
+
+## 8. HTTP security headers
+
+Set by Caddy on every response:
+
+```
+Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self';
+                         img-src 'self' data:; connect-src 'self';
+                         frame-ancestors 'none'; base-uri 'none'; object-src 'none'
+Strict-Transport-Security: max-age=31536000; includeSubDomains
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+Referrer-Policy: no-referrer
+Cross-Origin-Opener-Policy / Resource-Policy / Embedder-Policy
+Permissions-Policy: camera=(), microphone=(), geolocation=() …
+```
+
+No `'unsafe-inline'` anywhere — Vite emits a plain module script and a
+stylesheet link, so none is needed.
+
+The API sets an even tighter `default-src 'none'` CSP of its own: nothing may
+ever be loaded or executed from a JSON response.
+
+*Verified by:* `HDR-001`, `HDR-002`.
+
+---
+
+## 9. Telegram
+
+Outbound only. There is:
+
+- no webhook registration,
+- no `getUpdates` polling,
+- no parsing of any inbound message,
+- no endpoint for Telegram to call.
+
+The bot is a notification sink. Messages sent *to* it are never read, which
+removes the entire "attacker messages the bot to trigger something" class.
+
+The token is validated against `getMe` before being stored, kept in a root-only
+`0600` file, and passed to `curl` via `--data-urlencode` rather than argv. API
+responses are redacted before printing because Telegram echoes the token back in
+some error payloads.
+
+---
+
+## 10. Backups
+
+- Encrypted by restic **before** upload; Google Drive only ever holds ciphertext.
+- The passphrase is operator-chosen, never generated, never displayed, never
+  transmitted.
+- Plaintext database dumps exist only in `backups/staging`, which is wiped on
+  every exit path including failure.
+- The restore test runs in a throwaway container on its own internal network,
+  with the restore target asserted to be inside `backups/restore-tests/`.
+
+---
+
+## What this design deliberately does not do
+
+- No public webhook or management port.
+- No Tailscale Funnel, Cloudflare tunnel, or domain.
+- No rootless-Docker conversion of the host daemon (breaking change to existing
+  projects).
+- No `sudoers` entry for any service account.
+- No raw shell endpoint, in any component, at any privilege level.
+- No automatic commit, push or deploy.

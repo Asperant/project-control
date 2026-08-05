@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+apps/runner/bin/
+apps/web/dist/
+
+# Test / coverage
+coverage/
+.vitest/
+tests/tmp/
+
+# Local toolchains fetched by scripts
+.toolchain/
+
+# -----------------------------------------------------------------------------
+# SECRETS — never commit. Only *.example files belong in this repository.
+# -----------------------------------------------------------------------------
+secrets/
+*.secret
+*.key
+!*.key.example
+.env
+.env.*
+!.env.example
+!*.env.example
+rclone.conf
+!rclone.conf.example
+*.pem
+*.p12
+*.pfx
+
+# Runtime artifacts
+*.log
+logs/
+*.sock
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp

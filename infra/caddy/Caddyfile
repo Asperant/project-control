@@ -1,0 +1,159 @@
+# =============================================================================
+# Caddy — local-only reverse proxy for the Project Control portal.
+#
+# Listens on :8780 inside the container, published to 127.0.0.1:8780 on the
+# host. Tailscale Serve terminates TLS on the tailnet and forwards here.
+#
+# Caddy never obtains a certificate and never listens on 443: `auto_https off`
+# below is what guarantees it makes no outbound ACME request and opens no
+# additional listener.
+#
+# n8n is deliberately NOT routed here. It is served directly by Tailscale Serve
+# on :8443 from 127.0.0.1:5678, so a misconfiguration in this file cannot expose
+# it, and a compromise of this proxy does not reach it.
+# =============================================================================
+
+{
+	# No automatic HTTPS, no ACME, no certificate storage, no outbound calls.
+	auto_https off
+
+	# The admin API is a full control plane over the running proxy. It is off.
+	admin off
+
+	# Bound in-container; nothing else is exposed.
+	http_port 8780
+
+	servers {
+		# Do not advertise the server software in responses.
+		trusted_proxies static private_ranges
+	}
+
+	log {
+		output file /var/log/caddy/caddy.log {
+			roll_size 10MiB
+			roll_keep 5
+			roll_keep_for 336h
+		}
+		format json
+		level INFO
+	}
+}
+
+:8780 {
+	# -------------------------------------------------------------------------
+	# Security headers
+	#
+	# Applied to every response. The CSP is tight because the panel is a single
+	# self-hosted bundle: no CDN, no inline script, no external font, no frame.
+	# -------------------------------------------------------------------------
+	header {
+		# HSTS: the browser only ever reaches this through Tailscale HTTPS, so
+		# pinning it to HTTPS costs nothing and blocks a downgrade.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Resource-Policy "same-origin"
+		Cross-Origin-Embedder-Policy "require-corp"
+
+		# Vite emits a plain <script type="module"> and a stylesheet link, so no
+		# 'unsafe-inline' is needed anywhere.
+		Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; manifest-src 'self'"
+
+		Permissions-Policy "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=(), interest-cohort=()"
+
+		# Remove the fingerprinting header Caddy sets by default.
+		-Server
+		-X-Powered-By
+	}
+
+	# -------------------------------------------------------------------------
+	# Request body limit
+	#
+	# Independent of the API's own Fastify limit. Enforcing it here means an
+	# oversized body is dropped at the proxy and never reaches Node.
+	# -------------------------------------------------------------------------
+	request_body {
+		max_size 2MB
+	}
+
+	# -------------------------------------------------------------------------
+	# Proxy health endpoint
+	#
+	# Answered by Caddy itself so the container healthcheck does not depend on
+	# either upstream being up.
+	# -------------------------------------------------------------------------
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	# -------------------------------------------------------------------------
+	# API
+	#
+	# Only /api/* is proxied to the Control API. Its /health/* endpoints are NOT
+	# routed, so liveness and readiness stay reachable only from inside the
+	# container network.
+	# -------------------------------------------------------------------------
+	handle /api/* {
+		reverse_proxy {$PC_CONTROL_API_UPSTREAM} {
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+
+			# Fail fast: a hung API should surface as a 502 in the panel, not as
+			# a browser tab that spins for a minute.
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 30s
+			}
+
+			health_uri /health/live
+			health_interval 20s
+			health_timeout 5s
+		}
+	}
+
+	# -------------------------------------------------------------------------
+	# Explicitly blocked paths
+	#
+	# Defence in depth: even if a future upstream started serving these, the
+	# proxy refuses to route them.
+	# -------------------------------------------------------------------------
+	handle /health/* {
+		respond "Not found" 404
+	}
+	handle /metrics* {
+		respond "Not found" 404
+	}
+	handle /debug/* {
+		respond "Not found" 404
+	}
+
+	# -------------------------------------------------------------------------
+	# Everything else — the web panel
+	# -------------------------------------------------------------------------
+	handle {
+		reverse_proxy {$PC_WEB_UPSTREAM} {
+			transport http {
+				dial_timeout 5s
+			}
+		}
+	}
+
+	# Uniform error page; upstream error bodies are not forwarded verbatim.
+	handle_errors {
+		@5xx expression `{err.status_code} >= 500`
+		respond @5xx "The Project Control backend is unavailable. Check ./pcctl status on the host." {err.status_code}
+		respond "{err.status_code} {err.status_text}" {err.status_code}
+	}
+
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 10MiB
+			roll_keep 5
+			roll_keep_for 336h
+		}
+		format json
+	}
+}

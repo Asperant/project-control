@@ -1,0 +1,65 @@
+# =============================================================================
+# Project Control container stack.
+#
+# Brings the Compose stack up at boot and takes it down on shutdown, so the
+# acceptance criterion "services recover after a reboot" holds without anyone
+# logging in.
+#
+# `restart: unless-stopped` on the containers themselves already restores them
+# after a Docker daemon restart; this unit covers the case where the whole host
+# reboots and makes `systemctl status` a single source of truth.
+# =============================================================================
+
+[Unit]
+Description=Project Control container stack (docker compose)
+Documentation=file:///srv/project-control/docs/operations.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+WorkingDirectory=/srv/project-control
+
+# Root is required to talk to the Docker socket and to read
+# config/stack.env, which is 0640 root-owned.
+User=root
+Group=root
+
+EnvironmentFile=/srv/project-control/config/stack.env
+
+ExecStart=/usr/bin/docker compose \
+    --project-name project-control \
+    --project-directory /srv/project-control \
+    --env-file /srv/project-control/config/stack.env \
+    --file /srv/project-control/compose/compose.yaml \
+    up --detach --remove-orphans --wait --wait-timeout 180
+
+ExecStop=/usr/bin/docker compose \
+    --project-name project-control \
+    --project-directory /srv/project-control \
+    --env-file /srv/project-control/config/stack.env \
+    --file /srv/project-control/compose/compose.yaml \
+    stop --timeout 60
+
+# `stop`, never `down`: `down` would remove networks and, with the wrong flag,
+# risk data. Stopping leaves everything reconstructible in place.
+
+ExecReload=/usr/bin/docker compose \
+    --project-name project-control \
+    --project-directory /srv/project-control \
+    --env-file /srv/project-control/config/stack.env \
+    --file /srv/project-control/compose/compose.yaml \
+    up --detach --remove-orphans --wait
+
+TimeoutStartSec=300
+TimeoutStopSec=120
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pc-stack
+
+[Install]
+WantedBy=multi-user.target

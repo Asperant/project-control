@@ -1,0 +1,33 @@
+# =============================================================================
+# Weekly restic repository integrity check.
+#
+# `restic check --read-data-subset` verifies that a sample of the actual pack
+# files can be read and decrypted, not merely that the index is consistent. An
+# index-only check would happily pass on a repository whose data is corrupt.
+# =============================================================================
+[Unit]
+Description=Project Control weekly restic repository check
+Documentation=file:///srv/project-control/docs/backup-restore.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/srv/project-control
+ExecStart=/srv/project-control/scripts/backup.sh --check
+TimeoutStartSec=10800
+Nice=15
+IOSchedulingClass=idle
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+UMask=0077
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pc-check

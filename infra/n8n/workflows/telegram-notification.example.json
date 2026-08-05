@@ -1,0 +1,79 @@
+{
+  "name": "Project Control — Telegram notification (example)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000001",
+      "name": "Daily at 08:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-200, 0],
+      "notes": "Schedule trigger, NOT a webhook. This workflow has no inbound HTTP surface, which is required: no public webhook is exposed by this deployment."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build the notification text.\n//\n// Nothing here reads a credential. The bot token lives ONLY in the n8n\n// credential store (encrypted with N8N_ENCRYPTION_KEY) and is attached by the\n// Telegram node below — it never appears in this code, in the workflow JSON, or\n// in an execution log.\n\nconst now = new Date().toISOString();\n\nconst message = [\n  '📋 Project Control — daily status',\n  '',\n  `host: ${$env.HOSTNAME ?? 'project-control'}`,\n  `time: ${now}`,\n  '',\n  'This is an example workflow. Replace this node with real checks',\n  'against the Control API once Stage 2 exposes them.',\n].join('\\n');\n\nreturn [{ json: { message } }];"
+      },
+      "id": "a1000000-0000-4000-8000-000000000002",
+      "name": "Compose message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [20, 0]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.PC_TELEGRAM_CHAT_ID }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "disable_web_page_preview": true
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000003",
+      "name": "Send Telegram notification",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [240, 0],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Project Control Telegram bot"
+        }
+      },
+      "notes": "OUTBOUND ONLY. Create the credential in the n8n UI (Credentials → Telegram API) and paste the bot token there. The token is encrypted at rest with N8N_ENCRYPTION_KEY and is never included in a workflow export."
+    }
+  ],
+  "connections": {
+    "Daily at 08:00": {
+      "main": [[{ "node": "Compose message", "type": "main", "index": 0 }]]
+    },
+    "Compose message": {
+      "main": [[{ "node": "Send Telegram notification", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": false,
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all"
+  },
+  "staticData": null,
+  "tags": [
+    { "name": "project-control" },
+    { "name": "example" }
+  ],
+  "pinData": {},
+  "meta": {
+    "instanceId": "",
+    "description": "Example outbound Telegram notification. Import via n8n UI → Workflows → Import from File. IMPORTANT: this file contains NO credentials — the bot token must be entered once in the n8n credential store, and the chat id is read from the PC_TELEGRAM_CHAT_ID environment variable. Never paste a token into a workflow node, because workflow JSON is exported in plaintext."
+  }
+}

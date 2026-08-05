@@ -1,0 +1,616 @@
+# =============================================================================
+# Project Control — Docker Compose stack
+#
+# Project name: project-control (set via COMPOSE_PROJECT_NAME in config/stack.env)
+#
+# NETWORK TOPOLOGY
+#
+#         host loopback only
+#     127.0.0.1:8780 ──┐            ┌── 127.0.0.1:5678
+#                      │            │
+#                  ┌───▼────┐   ┌───▼───┐
+#     edge ────────┤ caddy  │   │  n8n  │
+#                  └───┬────┘   └───┬───┘
+#                      │            │
+#     application ─────┼────────────┤
+#                      │            │
+#              ┌───────▼──┐  ┌──────▼──┐
+#              │   web    │  │control- │
+#              └──────────┘  │   api   │
+#                            └────┬────┘
+#                                 │
+#     data ───────────────────────┼─────────┐
+#                                 │         │
+#                           ┌─────▼────┐    │
+#                           │ postgres │◄───┘ (n8n)
+#                           └──────────┘
+#
+#  * postgres is on `data` ONLY — unreachable from edge and from web.
+#  * web is on `application` ONLY — it cannot reach the database at all.
+#  * control-api spans `application` (to receive from Caddy) and `data`.
+#  * n8n spans `application` (health probe from control-api) and `data`.
+#  * caddy spans `edge` and `application`.
+#  * `data` is internal:true — no container on it can reach the internet.
+#  * db-bootstrap is on `data` ONLY, runs once after postgres is healthy, and
+#    gates control-api and n8n via `service_completed_successfully` — neither
+#    starts against a cluster with missing or half-provisioned roles/databases.
+#
+# PUBLISHED PORTS
+#   caddy  127.0.0.1:8780  (portal; fronted by Tailscale Serve on :443)
+#   n8n    127.0.0.1:5678  (admin;  fronted by Tailscale Serve on :8443)
+#   Nothing else publishes a port. Nothing binds 0.0.0.0.
+#
+# The Docker socket is not mounted into any container.
+# =============================================================================
+
+name: project-control
+
+# -----------------------------------------------------------------------------
+# Shared hardening applied to every service.
+# -----------------------------------------------------------------------------
+x-hardening: &hardening
+  security_opt:
+    # Blocks setuid binaries from gaining privileges — the single most valuable
+    # container flag, and cheap.
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  restart: unless-stopped
+  # `unless-stopped` rather than `always`: a container the operator deliberately
+  # stopped must stay stopped across a host reboot.
+  init: true
+  stop_grace_period: 30s
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+      # Bounded at 50 MiB per container; without this the json-file driver grows
+      # until the disk fills.
+
+services:
+  # ===========================================================================
+  # PostgreSQL — the only stateful service. Hosts both databases.
+  # ===========================================================================
+  postgres:
+    <<: [*hardening, *logging]
+    image: ${PC_POSTGRES_IMAGE:?PC_POSTGRES_IMAGE must be set from infra/versions.lock.env}
+    container_name: project-control-postgres
+    user: "${PC_POSTGRES_UID:-999}:${PC_POSTGRES_GID:-999}"
+
+    # No `ports:` key at all. The database is reachable only from the `data`
+    # network; there is deliberately no way to connect to it from the host.
+    networks:
+      - data
+
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      # The superuser password is read from a file, not from this environment.
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_superuser_password
+      # scram-sha-256 for every non-local connection; no trust, no md5.
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256 --data-checksums"
+      PGDATA: /var/lib/postgresql/data/pgdata
+      TZ: UTC
+
+    volumes:
+      - type: bind
+        source: ${PC_ROOT:?PC_ROOT must be set}/data/postgres
+        target: /var/lib/postgresql/data
+      # Bind-mounted as a single file, not a directory: this is the exact same
+      # file bind-mounted a second time into `db-bootstrap` below. There is
+      # only one copy of the role/database provisioning logic in the
+      # repository; see infra/postgres/reconcile/reconcile-roles-and-databases.sh
+      # for why it is safe to run both at first init and again later.
+      - type: bind
+        source: ${PC_ROOT}/config/postgres/reconcile/reconcile-roles-and-databases.sh
+        target: /docker-entrypoint-initdb.d/10-roles-and-databases.sh
+        read_only: true
+      - type: bind
+        source: ${PC_ROOT}/secrets/postgres
+        target: /run/secrets
+        read_only: true
+
+    # PostgreSQL needs a writable data directory, so `read_only: true` is not
+    # used here. Everything else it writes is redirected to tmpfs below.
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+      # A tmpfs mount defaults to root:root ownership regardless of the
+      # container's `user:`, because the mount is set up before the process
+      # is exec'd as that user. Without an explicit uid/gid here, the
+      # container (uid 999, no capabilities) can neither chmod nor write into
+      # its own socket directory, and the entrypoint's own `chmod 03775` on
+      # this path fails the same way. uid/gid are pinned to the same
+      # PC_POSTGRES_UID/GID used by `user:` above (verified against this
+      # image's actual `postgres` user, not assumed) so the directory is
+      # owned by the process that needs it. 0700 (owner-only, no setgid/
+      # sticky) is enough: nothing but this one process ever touches the
+      # socket directory, so there is no world- or group-writable bit to
+      # justify.
+      - /run/postgresql:rw,noexec,nosuid,nodev,size=16m,mode=0700,uid=${PC_POSTGRES_UID:-999},gid=${PC_POSTGRES_GID:-999}
+
+    healthcheck:
+      # `pg_isready` against the local socket. Does not authenticate, so it
+      # cannot be affected by a credential problem — it answers only "is the
+      # server accepting connections".
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres -h /run/postgresql -q"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 45s
+
+    stop_signal: SIGINT      # PostgreSQL fast shutdown
+    stop_grace_period: 60s
+
+    shm_size: 256mb          # shared_buffers/parallel workers need more than 64 MB
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g
+          pids: 256
+        reservations:
+          memory: 512m
+
+    command:
+      - postgres
+      - -c
+      - max_connections=100
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - work_mem=8MB
+      - -c
+      - maintenance_work_mem=128MB
+      - -c
+      - effective_cache_size=1GB
+      - -c
+      - wal_level=replica
+      - -c
+      - log_min_duration_statement=2000
+      - -c
+      - log_connections=on
+      - -c
+      - log_disconnections=on
+      - -c
+      - log_line_prefix=%m [%p] %q%u@%d
+      # Never log statement text: it would put parameter values, including
+      # password hashes being written, into the container log.
+      - -c
+      - log_statement=none
+
+  # ===========================================================================
+  # db-bootstrap — one-shot role/database reconciliation.
+  #
+  # Runs after postgres reports healthy and exits. control-api and n8n do not
+  # start until it exits 0 (see their `depends_on` below), so neither can hit
+  # a cluster whose roles or databases are missing or half-provisioned — the
+  # exact failure this service exists to close: an interrupted first init can
+  # leave PGDATA non-empty (so the postgres entrypoint never re-runs its
+  # /docker-entrypoint-initdb.d scripts) while the roles it was supposed to
+  # create never got made.
+  #
+  # Executes infra/postgres/reconcile/reconcile-roles-and-databases.sh — the
+  # same file, bind-mounted a second time, that the postgres service runs at
+  # first init. It is idempotent, so running it again here on an already
+  # fully-provisioned cluster changes nothing.
+  # ===========================================================================
+  db-bootstrap:
+    <<: [*hardening, *logging]
+    image: ${PC_POSTGRES_IMAGE:?PC_POSTGRES_IMAGE must be set from infra/versions.lock.env}
+    container_name: project-control-db-bootstrap
+    user: "${PC_POSTGRES_UID:-999}:${PC_POSTGRES_GID:-999}"
+
+    # A one-shot job must not be restarted after it exits, successfully or
+    # not — `unless-stopped` from the hardening anchor would otherwise loop it
+    # forever. This local key overrides the merged anchor value.
+    restart: "no"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    # `data` only, same as postgres itself. No `ports:`, no other network.
+    networks:
+      - data
+
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGCONNECT_TIMEOUT: "10"
+      TZ: UTC
+
+    entrypoint: ["/bin/bash", "/reconcile/reconcile-roles-and-databases.sh"]
+
+    volumes:
+      # The one canonical copy of the provisioning logic — see the comment on
+      # postgres's own init-script mount above.
+      - type: bind
+        source: ${PC_ROOT}/config/postgres/reconcile/reconcile-roles-and-databases.sh
+        target: /reconcile/reconcile-roles-and-databases.sh
+        read_only: true
+      # Same secrets bundle postgres itself reads: the superuser password plus
+      # all four application role passwords, nothing else.
+      - type: bind
+        source: ${PC_ROOT}/secrets/postgres
+        target: /run/secrets
+        read_only: true
+
+    read_only: true
+    tmpfs:
+      # Holds the short-lived PGPASSFILE the script builds for itself and
+      # deletes before exiting. uid/gid pinned so the non-root user can write
+      # to it, matching the postgres service's own tmpfs pattern.
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=0700,uid=${PC_POSTGRES_UID:-999},gid=${PC_POSTGRES_GID:-999}
+
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128m
+          pids: 32
+
+  # ===========================================================================
+  # Control API
+  # ===========================================================================
+  control-api:
+    <<: [*hardening, *logging]
+    image: ${PC_CONTROL_API_IMAGE:?PC_CONTROL_API_IMAGE must be set}
+    container_name: project-control-api
+    user: "${PC_APP_UID:-10001}:${PC_APP_GID:-10001}"
+
+    # Joins the host `project-control` group so it can open the runner socket.
+    # This is the only privilege the API holds on the host.
+    group_add:
+      - "${PC_CONTROL_GID:?PC_CONTROL_GID must be set}"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-bootstrap:
+        condition: service_completed_successfully
+
+    # No `ports:`. Reachable only from Caddy over the `application` network.
+    networks:
+      - application
+      - data
+
+    environment:
+      NODE_ENV: production
+      PC_STACK_VERSION: ${PC_STACK_VERSION:-0.0.0}
+      PC_API_HOST: 0.0.0.0
+      PC_API_PORT: "8080"
+      PC_API_BODY_LIMIT_BYTES: "1048576"
+
+      PC_PG_HOST: postgres
+      PC_PG_PORT: "5432"
+      PC_PG_DATABASE: project_control
+      PC_PG_USER: control_app
+      PC_PG_PASSWORD_FILE: /run/secrets/pg_control_app_password
+      PC_PG_MIGRATOR_USER: control_migrator
+      PC_PG_MIGRATOR_PASSWORD_FILE: /run/secrets/pg_control_migrator_password
+
+      PC_SESSION_SECRET_FILE: /run/secrets/session_secret
+      PC_SESSION_COOKIE_SECURE: "true"
+      PC_SESSION_ABSOLUTE_TTL_SECONDS: ${PC_SESSION_ABSOLUTE_TTL_SECONDS:-43200}
+      PC_SESSION_IDLE_TTL_SECONDS: ${PC_SESSION_IDLE_TTL_SECONDS:-3600}
+
+      PC_LOGIN_RATE_LIMIT_MAX: ${PC_LOGIN_RATE_LIMIT_MAX:-5}
+      PC_LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${PC_LOGIN_RATE_LIMIT_WINDOW_SECONDS:-300}
+
+      PC_ARTIFACT_ROOT: /data/artifacts
+      PC_ARTIFACT_MAX_BYTES: ${PC_ARTIFACT_MAX_BYTES:-268435456}
+
+      PC_RUNNER_SOCKET: /run/project-control/runner.sock
+      PC_RUNNER_TIMEOUT_MS: "10000"
+
+      PC_N8N_HEALTH_URL: http://n8n:5678/healthz
+      PC_TAILSCALE_STATUS_FILE: /config/tailscale-status.json
+      PC_BACKUP_STATUS_FILE: /config/backup-status.json
+
+      PC_LOG_LEVEL: ${PC_LOG_LEVEL:-info}
+      TZ: UTC
+
+    volumes:
+      # Artifact bytes. The only writable mount.
+      - type: bind
+        source: ${PC_ROOT}/data/artifacts
+        target: /data/artifacts
+      # Secrets, read-only.
+      - type: bind
+        source: ${PC_ROOT}/secrets/control-api
+        target: /run/secrets
+        read_only: true
+      # Status files written by host scripts, read-only.
+      - type: bind
+        source: ${PC_ROOT}/config/status
+        target: /config
+        read_only: true
+      # Runner socket — the narrowest possible mount: one socket file, not the
+      # directory, and certainly not the Docker socket.
+      - type: bind
+        source: /run/project-control/runner.sock
+        target: /run/project-control/runner.sock
+
+    # The application image is chmod a-w at build time; this makes the whole
+    # root filesystem immutable at runtime as well.
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 512m
+          pids: 128
+        reservations:
+          memory: 128m
+
+  # ===========================================================================
+  # Web — static asset server for the built React panel.
+  # ===========================================================================
+  web:
+    <<: [*hardening, *logging]
+    image: ${PC_WEB_IMAGE:?PC_WEB_IMAGE must be set}
+    container_name: project-control-web
+    user: "${PC_WEB_UID:-10003}:${PC_WEB_UID:-10003}"
+
+    # `application` only. The web container has no route to the database and no
+    # route to the internet-facing edge network.
+    networks:
+      - application
+
+    # No `ports:`. Reached only through Caddy.
+
+    environment:
+      TZ: UTC
+
+    read_only: true
+    tmpfs:
+      # XDG_CONFIG_HOME/XDG_DATA_HOME point at /tmp in the image, so this single
+      # writable mount is all Caddy needs when serving static files.
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8081/healthz"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128m
+          pids: 64
+
+  # ===========================================================================
+  # Caddy — local reverse proxy. The only container publishing the portal port.
+  # ===========================================================================
+  caddy:
+    <<: [*hardening, *logging]
+    image: ${PC_CADDY_PROXY_IMAGE:?PC_CADDY_PROXY_IMAGE must be set}
+    container_name: project-control-caddy
+    # Runs unprivileged. Possible because it listens on 8780 (> 1024), so no
+    # NET_BIND_SERVICE capability is required.
+    user: "${PC_APP_UID:-10001}:${PC_APP_GID:-10001}"
+
+    depends_on:
+      control-api:
+        condition: service_started
+      web:
+        condition: service_started
+
+    networks:
+      - edge
+      - application
+
+    ports:
+      # Bound to the loopback interface explicitly. Tailscale Serve on the host
+      # is what makes this reachable from the tailnet, and nothing else can.
+      - "127.0.0.1:8780:8780"
+
+    environment:
+      TZ: UTC
+      # Caddy resolves upstreams through Docker's embedded DNS.
+      PC_CONTROL_API_UPSTREAM: control-api:8080
+      PC_WEB_UPSTREAM: web:8081
+
+    volumes:
+      - type: bind
+        source: ${PC_ROOT}/config/caddy/Caddyfile
+        target: /etc/caddy/Caddyfile
+        read_only: true
+      - type: bind
+        source: ${PC_ROOT}/logs/caddy
+        target: /var/log/caddy
+
+    read_only: true
+    tmpfs:
+      # Caddy's XDG_CONFIG_HOME/XDG_DATA_HOME are set to /tmp in the image, so a
+      # single writable tmpfs covers autosave and state. Mounting /data and
+      # /config separately would give the non-root user two root-owned
+      # directories it cannot write.
+      - /tmp:rw,noexec,nosuid,nodev,size=48m
+
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8780/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256m
+          pids: 64
+
+  # ===========================================================================
+  # n8n — automation engine, PostgreSQL-backed.
+  # ===========================================================================
+  n8n:
+    <<: [*hardening, *logging]
+    image: ${PC_N8N_IMAGE:?PC_N8N_IMAGE must be set}
+    container_name: project-control-n8n
+    user: "${PC_N8N_UID:-1000}:${PC_N8N_GID:-1000}"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-bootstrap:
+        condition: service_completed_successfully
+
+    # `application` so control-api can probe /healthz; `data` for PostgreSQL.
+    # Not on `edge`: n8n is never routed through Caddy.
+    networks:
+      - application
+      - data
+
+    ports:
+      # Loopback only, fronted by Tailscale Serve on :8443.
+      - "127.0.0.1:5678:5678"
+
+    environment:
+      # --- Database: PostgreSQL, never SQLite ------------------------------
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: "5432"
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: n8n_app
+      DB_POSTGRESDB_PASSWORD_FILE: /run/secrets/pg_n8n_app_password
+      DB_POSTGRESDB_SCHEMA: public
+      DB_POSTGRESDB_POOL_SIZE: "4"
+
+      # --- Encryption key ---------------------------------------------------
+      # Persisting credentials depends entirely on this key staying stable. It
+      # is generated once by ./pcctl install and never rotated automatically.
+      N8N_ENCRYPTION_KEY_FILE: /run/secrets/n8n_encryption_key
+
+      # --- Network binding --------------------------------------------------
+      N8N_LISTEN_ADDRESS: 0.0.0.0
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: http
+      N8N_HOST: ${PC_TAILSCALE_HOSTNAME:-localhost}
+      # Editor URL must match what the browser sees through Tailscale Serve, or
+      # the SPA builds broken links.
+      N8N_EDITOR_BASE_URL: ${PC_N8N_PUBLIC_URL:-http://127.0.0.1:5678}
+      N8N_SECURE_COOKIE: ${PC_N8N_SECURE_COOKIE:-true}
+      # Tailscale Serve terminates TLS and adds one forwarding hop.
+      N8N_PROXY_HOPS: "1"
+
+      # --- Persistence ------------------------------------------------------
+      N8N_USER_FOLDER: /home/node/.n8n
+
+      # --- Telemetry / phone-home, all disabled -----------------------------
+      # Names verified against the pinned n8n 2.34.0 image's @n8n/config package.
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
+      N8N_TEMPLATES_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_HIRING_BANNER_ENABLED: "false"
+      N8N_DYNAMIC_BANNERS_ENABLED: "false"
+      N8N_AI_ENABLED: "false"
+      EXTERNAL_FRONTEND_HOOKS_URLS: ""
+
+      # --- Surface reduction -------------------------------------------------
+      # The public REST API is disabled: Stage 1 has no consumer for it, and it
+      # would be an authentication surface reachable through the same port.
+      N8N_PUBLIC_API_DISABLED: "true"
+      N8N_PUBLIC_API_SWAGGERUI_DISABLED: "true"
+      N8N_BLOCK_FILE_ACCESS_TO_N8N_FILES: "true"
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+
+      # --- Execution data retention ------------------------------------------
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: "336"          # 14 days
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: "all"
+      EXECUTIONS_DATA_SAVE_ON_ERROR: "all"
+      EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS: "true"
+
+      GENERIC_TIMEZONE: ${PC_TIMEZONE:-UTC}
+      TZ: ${PC_TIMEZONE:-UTC}
+      N8N_LOG_LEVEL: ${PC_N8N_LOG_LEVEL:-info}
+      N8N_LOG_OUTPUT: console
+
+    volumes:
+      - type: bind
+        source: ${PC_ROOT}/data/n8n
+        target: /home/node/.n8n
+      - type: bind
+        source: ${PC_ROOT}/secrets/n8n
+        target: /run/secrets
+        read_only: true
+
+    # n8n writes into its user folder (bind-mounted) and needs a writable /tmp
+    # for binary data staging; the rest of the filesystem is immutable.
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:5678/healthz || exit 1"]
+      interval: 20s
+      timeout: 8s
+      retries: 5
+      start_period: 90s
+
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1500m
+          pids: 256
+        reservations:
+          memory: 256m
+
+# -----------------------------------------------------------------------------
+# Networks
+# -----------------------------------------------------------------------------
+networks:
+  # Caddy's published-port side.
+  edge:
+    name: project-control_edge
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: pc-edge
+
+  # Application tier. Not internal, because control-api may need outbound HTTPS
+  # in a later stage; nothing on it publishes a port.
+  application:
+    name: project-control_application
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: pc-app
+
+  # Data tier. `internal: true` removes the default gateway, so PostgreSQL has
+  # no route off the host at all — it cannot be reached from outside and cannot
+  # itself reach out.
+  data:
+    name: project-control_data
+    driver: bridge
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.name: pc-data
+
+# -----------------------------------------------------------------------------
+# No named volumes.
+#
+# Every piece of state is a bind mount under /srv/project-control, which makes
+# it directly visible to restic without a helper container, and makes ownership
+# and permissions auditable with ls(1).
+# -----------------------------------------------------------------------------

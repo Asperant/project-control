@@ -1,0 +1,34 @@
+# =============================================================================
+# Monthly isolated restore test.
+#
+# Restores the latest snapshot into a throwaway directory and a throwaway
+# PostgreSQL container, verifies the dumps actually load and the artifact
+# digests still match, then destroys the scratch environment.
+#
+# It never writes to live data: the script refuses to run if its restore target
+# resolves anywhere inside data/.
+# =============================================================================
+[Unit]
+Description=Project Control monthly isolated restore test
+Documentation=file:///srv/project-control/docs/disaster-recovery.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/srv/project-control
+ExecStart=/srv/project-control/scripts/restore-test.sh --scheduled
+TimeoutStartSec=10800
+Nice=15
+IOSchedulingClass=idle
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+UMask=0077
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pc-restore-test

@@ -1,0 +1,16 @@
+packages:
+  - "packages/*"
+  - "apps/control-api"
+  - "apps/web"
+
+# Dependency lifecycle (install) scripts are denied by default, so a transitive
+# package cannot execute arbitrary code during `pnpm install`. Each entry below
+# is an explicit, reviewed exception.
+#
+#   @node-rs/argon2 — native password hasher used by the Control API. Ships
+#                     prebuilt binaries; the build script only selects one.
+#   esbuild         — bundler behind Vite/Vitest. Build-time only; never
+#                     present in a runtime image.
+allowBuilds:
+  "@node-rs/argon2": true
+  esbuild: true

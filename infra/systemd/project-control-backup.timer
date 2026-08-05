@@ -1,0 +1,17 @@
+# Nightly backup timer.
+[Unit]
+Description=Nightly Project Control backup
+Documentation=file:///srv/project-control/docs/backup-restore.md
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+# Spread the start so a fleet of machines does not hit Google Drive at once, and
+# so the run does not collide with other 02:30 cron work on this host.
+RandomizedDelaySec=30m
+# The whole point of Persistent: if the machine was asleep or off at 02:30, run
+# the backup once it comes back rather than skipping the night entirely.
+Persistent=true
+Unit=project-control-backup.service
+
+[Install]
+WantedBy=timers.target

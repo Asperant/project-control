@@ -1,0 +1,49 @@
+# =============================================================================
+# Nightly backup: PostgreSQL dumps + artifacts + n8n data + config → restic →
+# Google Drive (rclone).
+#
+# Deliberately independent of n8n. If the automation engine is broken, backups
+# must still run — that is exactly when they matter most.
+# =============================================================================
+
+[Unit]
+Description=Project Control backup (restic to Google Drive)
+Documentation=file:///srv/project-control/docs/backup-restore.md
+Requires=docker.service
+After=docker.service project-control-stack.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# Root, because the backup reads the secrets directory (0700 root) and must be
+# able to read every data directory regardless of its service owner.
+User=root
+Group=root
+
+WorkingDirectory=/srv/project-control
+
+ExecStart=/srv/project-control/scripts/backup.sh --scheduled
+
+# A backup that hangs must not block the next night's run.
+TimeoutStartSec=7200
+
+# Backups are I/O heavy; deprioritise them so an overnight run does not make the
+# portal sluggish if someone is using it.
+Nice=10
+IOSchedulingClass=idle
+CPUWeight=20
+
+# --- Hardening ---------------------------------------------------------------
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+LockPersonality=yes
+UMask=0077
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pc-backup
