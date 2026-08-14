@@ -148,11 +148,12 @@ export async function runMigrations(
       return result;
     }
 
+    if (options.dryRun) await client.query('BEGIN');
     for (const migration of pending) {
       const label = `${migration.version}_${migration.name}`;
       const started = Date.now();
 
-      await client.query('BEGIN');
+      if (!options.dryRun) await client.query('BEGIN');
       try {
         await client.query(migration.sql);
         const elapsed = Date.now() - started;
@@ -163,10 +164,10 @@ export async function runMigrations(
         );
 
         if (options.dryRun) {
-          // The SQL really executed, which is the only way to know it is valid;
-          // rolling back leaves the database exactly as it was found.
-          await client.query('ROLLBACK');
-          emit({ level: 'info', message: `dry-run OK: ${label} (${elapsed} ms, rolled back)` });
+          // Keep every pending migration visible to the next one. The complete
+          // set is rolled back after the loop, so a grants migration can safely
+          // validate objects created by the preceding schema migration.
+          emit({ level: 'info', message: `dry-run OK: ${label} (${elapsed} ms)` });
         } else {
           await client.query('COMMIT');
           emit({ level: 'info', message: `applied ${label} (${elapsed} ms)` });
@@ -177,6 +178,10 @@ export async function runMigrations(
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(`Migration ${label} failed: ${message}`, { cause: error });
       }
+    }
+    if (options.dryRun) {
+      await client.query('ROLLBACK');
+      emit({ level: 'info', message: `dry-run complete: ${pending.length} migration(s) validated and rolled back.` });
     }
 
     return result;

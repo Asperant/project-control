@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { loadMigrations } from './migrate.js';
+import { loadMigrations, runMigrations } from './migrate.js';
 
 let dir: string;
 
@@ -89,5 +89,19 @@ describe('repository migrations', () => {
       expect(migration.sql).not.toMatch(/PASSWORD\s+'[^']+'/i);
       expect(migration.sql).not.toMatch(/ENCRYPTED\s+PASSWORD/i);
     }
+  });
+});
+
+describe('migration dry-run transaction', () => {
+  it('keeps all pending migrations in one transaction before rolling back', async () => {
+    await writeFile(path.join(dir, '0001_create.sql'), 'CREATE TABLE dry_run_parent(id int);');
+    await writeFile(path.join(dir, '0002_grant.sql'), 'GRANT SELECT ON dry_run_parent TO PUBLIC;');
+    const calls:string[]=[];
+    const client={query:async(sql:string)=>{calls.push(sql.trim());if(sql.includes('SELECT version, name, checksum'))return {rows:[]};return {rows:[]};}};
+    const result=await runMigrations(client as never,{migrationsDir:dir,dryRun:true});
+    expect(result.applied).toEqual(['0001','0002']);
+    expect(calls.filter((sql)=>sql==='BEGIN')).toHaveLength(1);
+    expect(calls.filter((sql)=>sql==='ROLLBACK')).toHaveLength(1);
+    expect(calls.indexOf('ROLLBACK')).toBeGreaterThan(calls.indexOf('GRANT SELECT ON dry_run_parent TO PUBLIC;'));
   });
 });

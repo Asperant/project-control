@@ -119,7 +119,9 @@ log_step "4/8  Migration dry-run"
 # the old stack is still running and healthy.
 api_cid="$(container_id control-api)"
 if [[ -n "$api_cid" ]]; then
-  if docker exec "$api_cid" node dist/cli/migrate.js --dry-run 2>&1 | redact_stream; then
+  # Use the image that was just built, not the still-running old container:
+  # only the new image contains the pending migration files being validated.
+  if compose run --rm --no-deps --entrypoint node control-api dist/cli/migrate.js --dry-run 2>&1 | redact_stream; then
     log_ok "migration dry-run passed"
   else
     audit system.update failure '{"stage":"migration_dry_run"}'
@@ -136,6 +138,7 @@ log_step "5/8  Checking for irreversible migrations"
 # old code, so the automatic rollback path would not actually restore service.
 # The operator must decide explicitly.
 irreversible=""
+PENDING_MIGRATIONS=0
 for migration in "${PC_REPO_ROOT}"/migrations/*.sql; do
   [[ -f "$migration" ]] || continue
   name="$(basename "$migration")"
@@ -148,6 +151,7 @@ for migration in "${PC_REPO_ROOT}"/migrations/*.sql; do
       "SELECT 1 FROM schema_migrations WHERE version='${version}'" 2>/dev/null || echo '')"
     [[ "$applied" == "1" ]] && continue
   fi
+  PENDING_MIGRATIONS=$((PENDING_MIGRATIONS+1))
 
   if grep -qiE '^\s*(DROP\s+(TABLE|COLUMN|DATABASE|SCHEMA)|ALTER\s+TABLE\s+\S+\s+DROP\s+COLUMN|TRUNCATE)' "$migration"; then
     irreversible+="  - ${name}"$'\n'
@@ -166,6 +170,19 @@ if [[ -n "$irreversible" ]]; then
 fi
 log_ok "no unreviewed irreversible migration"
 
+rollback_or_require_restore() {
+  local stage="$1"
+  if (( PENDING_MIGRATIONS > 0 )); then
+    log_error "automatic image rollback skipped: ${PENDING_MIGRATIONS} migration(s) may have advanced the database ledger"
+    log_error "an older Control API image may refuse this schema; follow docs/disaster-recovery.md using the fresh pre-update backup"
+    audit system.update failure "$(printf '{\"stage\":\"%s\",\"restoreRequired\":true}' "$stage")"
+    notify "🔴 Project Control update FAILED on $(hostname -s); database restore review required before image rollback"
+    return 1
+  fi
+  log_step "Rolling back automatically"
+  bash "${PC_SCRIPTS_DIR}/rollback.sh" --auto
+}
+
 # =============================================================================
 log_step "6/8  Applying the update"
 # =============================================================================
@@ -174,6 +191,14 @@ install_file "${PC_REPO_ROOT}/infra/compose/compose.yaml" "${PC_ROOT}/compose/co
 install_file "${PC_REPO_ROOT}/infra/caddy/Caddyfile" "${PC_ROOT}/config/caddy/Caddyfile" 0644
 for migration in "${PC_REPO_ROOT}"/migrations/*.sql; do
   [[ -f "$migration" ]] && install_file "$migration" "${PC_ROOT}/migrations/$(basename "$migration")" 0644
+done
+for script in backup.sh restore-test.sh verify.sh verify-security.sh telegram-notify.sh; do
+  [[ -f "${PC_SCRIPTS_DIR}/${script}" ]] && install_file "${PC_SCRIPTS_DIR}/${script}" "${PC_ROOT}/scripts/${script}" 0750
+done
+ensure_dir "${PC_ROOT}/scripts/lib" 0755 root root
+install_file "${PC_SCRIPTS_DIR}/lib/common.sh" "${PC_ROOT}/scripts/lib/common.sh" 0644
+for doc in "${PC_REPO_ROOT}"/docs/*.md; do
+  [[ -f "$doc" ]] && install_file "$doc" "${PC_ROOT}/docs/$(basename "$doc")" 0644
 done
 
 # Refresh the image references in stack.env.
@@ -199,9 +224,7 @@ log_info "recreating containers"
 if ! compose up --detach --remove-orphans --wait --wait-timeout 300; then
   log_error "the updated stack did not become healthy"
   audit system.update failure '{"stage":"compose_up"}'
-  log_step "Rolling back automatically"
-  bash "${PC_SCRIPTS_DIR}/rollback.sh" --auto
-  notify "🔴 Project Control update FAILED on $(hostname -s); rolled back automatically"
+  rollback_or_require_restore compose_up || true
   exit 1
 fi
 log_ok "containers recreated"
@@ -230,9 +253,7 @@ fi
 if (( ! gate_passed )); then
   log_error "health gate FAILED after the update"
   audit system.update failure '{"stage":"health_gate"}'
-  log_step "Rolling back automatically"
-  bash "${PC_SCRIPTS_DIR}/rollback.sh" --auto
-  notify "🔴 Project Control update FAILED the health gate on $(hostname -s); rolled back automatically"
+  rollback_or_require_restore health_gate || true
   exit 1
 fi
 log_ok "health gate passed"
@@ -243,7 +264,10 @@ log_step "8/8  Post-update verification"
 if bash "${PC_SCRIPTS_DIR}/verify.sh"; then
   log_ok "verification passed"
 else
-  log_warn "verification reported issues; the stack is healthy but review the output"
+  log_error "verification FAILED after the update"
+  audit system.update failure '{"stage":"verification"}'
+  notify "🔴 Project Control update verification FAILED on $(hostname -s); manual review required"
+  exit 1
 fi
 
 audit system.update success "$(printf '{"version":"%s"}' "$PC_STACK_VERSION")"

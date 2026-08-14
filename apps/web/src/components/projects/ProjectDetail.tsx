@@ -9,6 +9,7 @@ import type {
 } from '@project-control/contracts';
 import { ApiError, api } from '../../api-client';
 import { AccessibilityBadge, ProjectPriorityBadge, ProjectStatusBadge, formatRelativeTime } from './badges';
+import { RoadmapView } from '../roadmap/RoadmapView';
 
 export function ProjectDetail({
   projectId,
@@ -27,6 +28,7 @@ export function ProjectDetail({
   const [activity, setActivity] = useState<ProjectActivityEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [view, setView] = useState<'overview' | 'roadmap'>('overview');
 
   const [editingInfo, setEditingInfo] = useState(false);
   const [form, setForm] = useState<{
@@ -205,6 +207,13 @@ export function ProjectDetail({
         </div>
       )}
 
+      <nav className="detail-tabs" aria-label="Project detail sections">
+        <button type="button" aria-current={view === 'overview' ? 'page' : undefined} onClick={() => setView('overview')}>Overview</button>
+        <button type="button" aria-current={view === 'roadmap' ? 'page' : undefined} onClick={() => setView('roadmap')}>Roadmap</button>
+      </nav>
+
+      {view === 'roadmap' ? <RoadmapView projectId={projectId} canWrite={canWrite} archived={project.status === 'archived'} onSessionExpired={onSessionExpired} /> : <>
+
       <article className="card">
         <div className="card-head">
           <span className="card-title">General information</span>
@@ -347,6 +356,7 @@ export function ProjectDetail({
           ))}
         </ul>
       </article>
+      </>}
     </section>
   );
 }

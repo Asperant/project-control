@@ -1,5 +1,15 @@
 # Architecture
 
+## Manual roadmap domain
+
+Registered projects own milestones, milestones own tasks, and task detail owns
+acceptance criteria, dependency links, and notes. The Control API is the only
+write path. Domain transactions lock the project row before mutation, which
+makes archived-project enforcement, reorder, and dependency graph changes
+atomic. Progress is derived from task status. Activity reuses append-only
+`audit_events`; no second history subsystem exists. The runner, project files,
+n8n, and Git are outside this data path. See [manual-roadmap.md](manual-roadmap.md).
+
 ## Overview
 
 ```

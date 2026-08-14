@@ -14,6 +14,7 @@ export const errorCodeSchema = z.enum([
   'csrf_failed',
   'not_found',
   'conflict',
+  'confirmation_required',
   'payload_too_large',
   'rate_limited',
   'internal_error',
@@ -34,6 +35,10 @@ export const errorResponseSchema = z.object({
     message: z.string().min(1).max(500),
     /** Field-level detail, only ever populated for `validation_failed`. */
     fields: z.array(z.object({ path: z.string(), message: z.string() })).optional(),
+    confirmation: z.object({
+      kind: z.enum(['incomplete_acceptance', 'incomplete_dependencies']),
+      count: z.number().int().positive(),
+    }).optional(),
   }),
   requestId: requestIdSchema,
 });
@@ -48,6 +53,7 @@ export const errorCodeStatus: Record<ErrorCode, number> = {
   csrf_failed: 403,
   not_found: 404,
   conflict: 409,
+  confirmation_required: 409,
   payload_too_large: 413,
   rate_limited: 429,
   internal_error: 500,

@@ -186,6 +186,41 @@ if [[ -n "$(container_id postgres)" ]] && is_root; then
   else
     record_check FAIL PG-007 "Project-registration migrations not fully applied" "found ${project_migrations}/2"
   fi
+
+  roadmap_tables="$(psql_super project_control "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('roadmap_milestones','roadmap_tasks','task_acceptance_criteria','task_dependencies','task_notes')" || echo 0)"
+  if [[ "${roadmap_tables:-0}" == "5" ]]; then
+    record_check PASS PG-008 "All five roadmap tables exist" ""
+  else
+    record_check FAIL PG-008 "Expected 5 roadmap tables, found ${roadmap_tables}" ""
+  fi
+
+  roadmap_migrations="$(psql_super project_control "SELECT count(*) FROM schema_migrations WHERE version IN ('0005','0006')" || echo 0)"
+  if [[ "${roadmap_migrations:-0}" == "2" ]]; then
+    record_check PASS PG-009 "Roadmap migrations (0005, 0006) applied" ""
+  else
+    record_check FAIL PG-009 "Roadmap migrations not fully applied" "found ${roadmap_migrations}/2"
+  fi
+
+  roadmap_constraints="$(psql_super project_control "SELECT count(*) FROM pg_constraint WHERE conname IN ('roadmap_milestones_position_key','roadmap_tasks_position_key','task_acceptance_position_key','task_dependencies_pkey','task_dependencies_not_self')" || echo 0)"
+  if [[ "${roadmap_constraints:-0}" == "5" ]]; then
+    record_check PASS PG-010 "Roadmap ordering and dependency constraints exist" ""
+  else
+    record_check FAIL PG-010 "Roadmap constraints are incomplete" "found ${roadmap_constraints}/5"
+  fi
+
+  roadmap_fks="$(psql_super project_control "SELECT count(*) FROM pg_constraint WHERE conname IN ('roadmap_milestones_project_id_fkey','roadmap_tasks_milestone_id_fkey','task_acceptance_criteria_task_id_fkey','task_dependencies_task_id_fkey','task_dependencies_depends_on_task_id_fkey','task_notes_task_id_fkey')" || echo 0)"
+  if [[ "${roadmap_fks:-0}" == "6" ]]; then
+    record_check PASS PG-011 "Roadmap ownership foreign keys exist" ""
+  else
+    record_check FAIL PG-011 "Roadmap foreign keys are incomplete" "found ${roadmap_fks}/6"
+  fi
+
+  roadmap_acl="$(psql_super project_control "SELECT has_table_privilege('backup_reader','roadmap_milestones','SELECT') AND has_table_privilege('backup_reader','roadmap_tasks','SELECT') AND has_table_privilege('backup_reader','task_acceptance_criteria','SELECT') AND has_table_privilege('backup_reader','task_dependencies','SELECT') AND has_table_privilege('backup_reader','task_notes','SELECT') AND NOT has_table_privilege('backup_reader','roadmap_milestones','INSERT,UPDATE,DELETE') AND NOT has_table_privilege('control_app','roadmap_milestones','DELETE') AND NOT has_table_privilege('control_app','roadmap_tasks','DELETE') AND NOT has_table_privilege('control_app','task_dependencies','UPDATE')" || echo f)"
+  if [[ "$roadmap_acl" == "t" ]]; then
+    record_check PASS PG-012 "Roadmap role grants preserve least privilege" ""
+  else
+    record_check FAIL PG-012 "Roadmap role grants are too broad or incomplete" "review migrations/0006"
+  fi
 else
   record_check SKIP PG-001 "PostgreSQL checks" "requires root (to read secrets) and a running container"
 fi
@@ -225,6 +260,17 @@ if code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "${PORTAL}/api/
   fi
 else
   record_check FAIL API-005 "/api/projects is not routed through Caddy" ""
+fi
+
+ROADMAP_VERIFY_PROJECT="00000000-0000-4000-8000-000000000001"
+if code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "${PORTAL}/api/projects/${ROADMAP_VERIFY_PROJECT}/roadmap" 2>/dev/null)"; then
+  if [[ "$code" == "401" ]]; then
+    record_check PASS API-006 "Roadmap endpoints require authentication" "HTTP 401"
+  else
+    record_check FAIL API-006 "Roadmap endpoint returned HTTP ${code}" "expected 401 for an anonymous request"
+  fi
+else
+  record_check FAIL API-006 "Roadmap endpoint is not routed through Caddy" ""
 fi
 
 # Health endpoints must NOT be exposed through the proxy.

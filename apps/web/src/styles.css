@@ -239,6 +239,33 @@ button.primary {
   font-weight: 600;
 }
 
+.detail-tabs { display:flex; gap:.5rem; margin:1rem 0; border-bottom:1px solid var(--border); }
+.detail-tabs button[aria-current="page"] { border-color:var(--accent); color:var(--accent); font-weight:650; }
+.roadmap-view { display:grid; gap:1rem; }
+.roadmap-view section + section { margin-top:0; }
+.roadmap-empty { text-align:center; padding:2rem; }
+.milestone-card { gap:.75rem; }
+.roadmap-inactive { opacity:.8; }
+.roadmap-expand,.task-open { border:0; background:transparent; padding:.25rem; text-align:left; }
+.roadmap-progress { display:flex; align-items:center; gap:.75rem; flex-wrap:wrap; font-size:.85rem; }
+.roadmap-progress progress { flex:1; min-width:10rem; accent-color:var(--accent); }
+.roadmap-actions,.roadmap-order { display:flex; gap:.35rem; align-items:center; flex-wrap:wrap; }
+.roadmap-tasks { display:grid; gap:.5rem; border-top:1px solid var(--border); padding-top:.75rem; }
+.roadmap-task-row { display:flex; gap:.5rem; align-items:center; justify-content:space-between; background:var(--surface-alt); border-radius:8px; padding:.35rem; }
+.task-open { display:grid; grid-template-columns:auto 1fr; column-gap:.5rem; flex:1; }
+.task-open small { grid-column:2; color:var(--text-muted); }
+.roadmap-form { display:grid; gap:.65rem; }
+.check-row { display:flex; align-items:center; gap:.6rem; flex-wrap:wrap; padding:.35rem 0; border-bottom:1px solid var(--border); }
+.check-row > span:nth-child(2) { flex:1; min-width:12rem; }
+.inline-add { display:flex; gap:.5rem; align-items:end; flex-wrap:wrap; margin-top:.75rem; }
+.inline-add input,.inline-add select { flex:1; min-width:12rem; }
+.roadmap-activity { list-style:none; padding:0; margin:0; display:grid; gap:.5rem; }
+.roadmap-activity li { display:flex; justify-content:space-between; gap:1rem; border-bottom:1px solid var(--border); padding:.35rem 0; }
+.roadmap-activity time,.note time { color:var(--text-muted); font-size:.78rem; }
+.note { border-bottom:1px solid var(--border); padding:.5rem 0; }
+.note p { white-space:pre-wrap; overflow-wrap:anywhere; }
+@media (max-width:640px){.roadmap-task-row,.roadmap-activity li{align-items:stretch;flex-direction:column}.roadmap-view button,.roadmap-view select,.roadmap-view input[type="checkbox"],.task-detail button,.task-detail select{min-height:44px}.task-detail .card{padding:.8rem}.roadmap-progress progress{width:100%}}
+
 /* --- Forms ----------------------------------------------------------------- */
 .login-wrap {
   min-height: 100dvh;

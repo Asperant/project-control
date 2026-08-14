@@ -208,7 +208,7 @@ restore_and_check() {
   log_ok "${database}: all expected tables present (${#expected_tables[@]})"
 }
 
-restore_and_check project_control users sessions audit_events schema_migrations system_settings artifact_objects
+restore_and_check project_control users sessions audit_events schema_migrations system_settings artifact_objects projects roadmap_milestones roadmap_tasks task_acceptance_criteria task_dependencies task_notes
 
 # n8n owns its own schema, so the table list is not asserted; the check is that
 # the dump loads and contains something.
@@ -232,6 +232,15 @@ if [[ "${migrations:-0}" -gt 0 ]]; then
   log_ok "project_control: ${migrations} migration record(s) restored"
 else
   fail "restored project_control has an empty migration ledger"
+fi
+
+roadmap_constraints="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM pg_constraint WHERE conname IN ('roadmap_milestones_project_id_fkey','roadmap_tasks_milestone_id_fkey','task_acceptance_criteria_task_id_fkey','task_dependencies_task_id_fkey','task_dependencies_depends_on_task_id_fkey','task_notes_task_id_fkey','roadmap_milestones_position_key','roadmap_tasks_position_key','task_dependencies_pkey','task_dependencies_not_self')" 2>/dev/null || echo 0)"
+if [[ "${roadmap_constraints:-0}" == "10" ]]; then
+  log_ok "project_control: roadmap relationships and uniqueness constraints restored"
+else
+  fail "restored project_control is missing roadmap constraints (${roadmap_constraints}/10)"
 fi
 
 # =============================================================================

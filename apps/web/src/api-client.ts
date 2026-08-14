@@ -13,6 +13,9 @@ import {
   projectRuleResponseSchema,
   projectTechnologyResponseSchema,
   rescanProjectResponseSchema,
+  projectRoadmapResponseSchema,
+  taskDetailMutationResponseSchema,
+  roadmapActivityResponseSchema,
   systemStatusResponseSchema,
   type ApplyRescanRequest,
   type ApplyRescanResponse,
@@ -31,6 +34,14 @@ import {
   type ProjectResponse,
   type RescanProjectResponse,
   type SystemStatusResponse,
+  type ProjectRoadmapResponse,
+  type TaskDetailResponse,
+  type CreateMilestoneRequest,
+  type UpdateMilestoneRequest,
+  type ChangeMilestoneStatusRequest,
+  type CreateTaskRequest,
+  type UpdateTaskRequest,
+  type ChangeTaskStatusRequest,
   type UpdateProjectCommandRequest,
   type UpdateProjectRequest,
   type UpdateProjectRuleRequest,
@@ -55,6 +66,7 @@ export class ApiError extends Error {
     message: string,
     readonly status?: number,
     readonly requestId?: string,
+    readonly confirmation?: { kind: 'incomplete_acceptance' | 'incomplete_dependencies'; count: number },
   ) {
     super(message);
     this.name = 'ApiError';
@@ -152,6 +164,7 @@ async function request<T>(
         parsed.data.error.message,
         response.status,
         parsed.data.requestId,
+        parsed.data.error.confirmation,
       );
     }
     throw new ApiError(
@@ -295,4 +308,28 @@ export const api = {
   applyRescan(id: string, body: ApplyRescanRequest): Promise<ApplyRescanResponse> {
     return request(`/api/projects/${id}/rescan/apply`, applyRescanResponseSchema, { method: 'POST', body });
   },
+
+  getRoadmap(projectId:string,signal?:AbortSignal):Promise<ProjectRoadmapResponse>{return request(`/api/projects/${projectId}/roadmap`,projectRoadmapResponseSchema,signal?{signal}:{});},
+  getRoadmapActivity(projectId:string){return request(`/api/projects/${projectId}/roadmap/activity`,roadmapActivityResponseSchema);},
+  createMilestone(projectId:string,body:CreateMilestoneRequest){return request(`/api/projects/${projectId}/roadmap/milestones`,projectRoadmapResponseSchema,{method:'POST',body});},
+  updateMilestone(projectId:string,milestoneId:string,body:UpdateMilestoneRequest){return request(`/api/projects/${projectId}/roadmap/milestones/${milestoneId}`,projectRoadmapResponseSchema,{method:'PATCH',body});},
+  changeMilestoneStatus(projectId:string,milestoneId:string,body:ChangeMilestoneStatusRequest){return request(`/api/projects/${projectId}/roadmap/milestones/${milestoneId}/status`,projectRoadmapResponseSchema,{method:'POST',body});},
+  reorderMilestone(projectId:string,milestoneId:string,direction:'up'|'down'){return request(`/api/projects/${projectId}/roadmap/milestones/${milestoneId}/reorder`,projectRoadmapResponseSchema,{method:'POST',body:{direction}});},
+  archiveMilestone(projectId:string,milestoneId:string){return request(`/api/projects/${projectId}/roadmap/milestones/${milestoneId}/archive`,projectRoadmapResponseSchema,{method:'POST'});},
+  reactivateMilestone(projectId:string,milestoneId:string){return request(`/api/projects/${projectId}/roadmap/milestones/${milestoneId}/reactivate`,projectRoadmapResponseSchema,{method:'POST'});},
+  createRoadmapTask(projectId:string,milestoneId:string,body:CreateTaskRequest){return request(`/api/projects/${projectId}/roadmap/milestones/${milestoneId}/tasks`,taskDetailMutationResponseSchema,{method:'POST',body});},
+  getRoadmapTask(projectId:string,taskId:string,signal?:AbortSignal):Promise<{detail:TaskDetailResponse}>{return request(`/api/projects/${projectId}/roadmap/tasks/${taskId}`,taskDetailMutationResponseSchema,signal?{signal}:{});},
+  updateRoadmapTask(projectId:string,taskId:string,body:UpdateTaskRequest){return request(`/api/projects/${projectId}/roadmap/tasks/${taskId}`,taskDetailMutationResponseSchema,{method:'PATCH',body});},
+  changeRoadmapTaskStatus(projectId:string,taskId:string,body:ChangeTaskStatusRequest){return request(`/api/projects/${projectId}/roadmap/tasks/${taskId}/status`,taskDetailMutationResponseSchema,{method:'POST',body});},
+  reorderRoadmapTask(projectId:string,taskId:string,direction:'up'|'down'){return request(`/api/projects/${projectId}/roadmap/tasks/${taskId}/reorder`,projectRoadmapResponseSchema,{method:'POST',body:{direction}});},
+  addCriterion(projectId:string,taskId:string,text:string){return request(`/api/projects/${projectId}/roadmap/tasks/${taskId}/criteria`,taskDetailMutationResponseSchema,{method:'POST',body:{text}});},
+  updateCriterion(projectId:string,taskId:string,criterionId:string,text:string){return request(`/api/projects/${projectId}/roadmap/tasks/${taskId}/criteria/${criterionId}`,taskDetailMutationResponseSchema,{method:'PATCH',body:{text}});},
+  completeCriterion(projectId:string,taskId:string,criterionId:string,isCompleted:boolean){return request(`/api/projects/${projectId}/roadmap/tasks/${taskId}/criteria/${criterionId}/completion`,taskDetailMutationResponseSchema,{method:'POST',body:{isCompleted}});},
+  reorderCriterion(projectId:string,taskId:string,criterionId:string,direction:'up'|'down'){return request(`/api/projects/${projectId}/roadmap/tasks/${taskId}/criteria/${criterionId}/reorder`,taskDetailMutationResponseSchema,{method:'POST',body:{direction}});},
+  deleteCriterion(projectId:string,taskId:string,criterionId:string){return request(`/api/projects/${projectId}/roadmap/tasks/${taskId}/criteria/${criterionId}`,taskDetailMutationResponseSchema,{method:'DELETE'});},
+  addDependency(projectId:string,taskId:string,dependsOnTaskId:string){return request(`/api/projects/${projectId}/roadmap/tasks/${taskId}/dependencies`,taskDetailMutationResponseSchema,{method:'POST',body:{dependsOnTaskId}});},
+  removeDependency(projectId:string,taskId:string,dependsOnTaskId:string){return request(`/api/projects/${projectId}/roadmap/tasks/${taskId}/dependencies/${dependsOnTaskId}`,taskDetailMutationResponseSchema,{method:'DELETE'});},
+  addNote(projectId:string,taskId:string,body:string){return request(`/api/projects/${projectId}/roadmap/tasks/${taskId}/notes`,taskDetailMutationResponseSchema,{method:'POST',body:{body}});},
+  updateNote(projectId:string,taskId:string,noteId:string,body:string){return request(`/api/projects/${projectId}/roadmap/tasks/${taskId}/notes/${noteId}`,taskDetailMutationResponseSchema,{method:'PATCH',body:{body}});},
+  deleteNote(projectId:string,taskId:string,noteId:string){return request(`/api/projects/${projectId}/roadmap/tasks/${taskId}/notes/${noteId}`,taskDetailMutationResponseSchema,{method:'DELETE'});},
 };

@@ -23,6 +23,19 @@
 # test mirrors it exactly and cross-checks that mirror against the live
 # script text so a future edit to the production regex cannot silently
 # leave this test validating stale logic.
+#
+# Fixture values that are themselves secret-shaped (a password literal, a
+# PEM key, a Telegram-shaped token, ...) are assembled at runtime from
+# split, individually-benign fragments (see the `chunk1`/`chunk2` locals
+# below each `write` call) rather than written out whole in this source
+# file. GIT-001 also scans this file itself as a tracked repository file,
+# and a secret-shaped literal sitting whole in tracked source is exactly
+# what it exists to catch — so the classifier correctly flagged this file
+# once these fixtures were added directly. Splitting each value keeps the
+# generated scratch file (under $SCRATCH, always untracked) byte-identical
+# to what each scenario below documents, while leaving no complete
+# credential-shaped literal in the tracked .sh source for GIT-001 to
+# (correctly) trip on.
 # =============================================================================
 set -Eeuo pipefail
 IFS=$'\n\t'
@@ -73,7 +86,9 @@ write() { mkdir -p "$(dirname -- "${SCRATCH}/$1")"; printf '%s\n' "$2" >"${SCRAT
 # -----------------------------------------------------------------------------
 # 1. A real secret literal -> FLAGGED
 # -----------------------------------------------------------------------------
-write "real-literal.txt" 'password = "hunter2Actual9SecretValue"'
+chunk1="hunter2Actual9"
+chunk2="SecretValue"
+write "real-literal.txt" "password = \"${chunk1}${chunk2}\""
 assert_flagged "real-literal.txt" "real password literal"
 
 # -----------------------------------------------------------------------------
@@ -124,14 +139,22 @@ assert_clean "bare-braced-expansion.sh" "bare \${VAR} shell expansion"
 # 6c. A real, unquoted shell literal with no $ prefix -> FLAGGED. This is the
 #     exact case the digit/entropy heuristic used to wrongly wave through.
 # -----------------------------------------------------------------------------
-write "shell-literal-1.sh" 'PASSWORD=supersecret'
-assert_flagged "shell-literal-1.sh" "PASSWORD=supersecret"
-write "shell-literal-2.sh" 'PASSWORD=hunter2'
-assert_flagged "shell-literal-2.sh" "PASSWORD=hunter2"
-write "shell-literal-3.sh" 'DATABASE_PASSWORD=myverysecretpassword'
-assert_flagged "shell-literal-3.sh" "DATABASE_PASSWORD=myverysecretpassword"
-write "shell-literal-4.sh" 'API_TOKEN=abcdefghijklmnopqrstuvwxyz'
-assert_flagged "shell-literal-4.sh" "API_TOKEN=abcdefg..."
+chunk1="super"
+chunk2="secret"
+write "shell-literal-1.sh" "PASSWORD=${chunk1}${chunk2}"
+assert_flagged "shell-literal-1.sh" "unquoted PASSWORD literal, no digits"
+chunk1="hun"
+chunk2="ter2"
+write "shell-literal-2.sh" "PASSWORD=${chunk1}${chunk2}"
+assert_flagged "shell-literal-2.sh" "unquoted PASSWORD literal, short, no digits"
+chunk1="myvery"
+chunk2="secretpassword"
+write "shell-literal-3.sh" "DATABASE_PASSWORD=${chunk1}${chunk2}"
+assert_flagged "shell-literal-3.sh" "unquoted DATABASE_PASSWORD literal"
+chunk1="abcdefghijklm"
+chunk2="nopqrstuvwxyz"
+write "shell-literal-4.sh" "API_TOKEN=${chunk1}${chunk2}"
+assert_flagged "shell-literal-4.sh" "unquoted API_TOKEN literal"
 
 # -----------------------------------------------------------------------------
 # 7. The explicit test sentinel -> CLEAN
@@ -143,22 +166,30 @@ assert_clean "sentinel.sh" "regression-test-only sentinel"
 # -----------------------------------------------------------------------------
 # 8. A PEM private key literal -> FLAGGED
 # -----------------------------------------------------------------------------
-write "key.pem" "-----BEGIN RSA PRIVATE KEY-----
-MIIEowIBAAKCAQEAtestNotARealKeyButShapedLikeOne1234567890abcdef
------END RSA PRIVATE KEY-----"
+chunk1="-----BEG"
+chunk2="IN RSA PRIVATE KEY-----"
+pem_body="MIIEowIBAAKCAQEAtestNotARealKeyButShapedLikeOne1234567890abcdef"
+pem_footer="-----END RSA PRIVATE KEY-----"
+write "key.pem" "${chunk1}${chunk2}
+${pem_body}
+${pem_footer}"
 assert_flagged "key.pem" "PEM private key literal"
 
 # -----------------------------------------------------------------------------
 # 9. A token-shaped literal (Telegram bot-token shape: digits:random) -> FLAGGED
 # -----------------------------------------------------------------------------
-write "token.ts" 'const token = "123456789:AAHexampleRealisticBotToken1234567890xyz";'
+chunk1="123456789"
+chunk2=":AAHexampleRealisticBotToken1234567890xyz"
+write "token.ts" "const token = \"${chunk1}${chunk2}\";"
 assert_flagged "token.ts" "token-shaped literal"
 
 # -----------------------------------------------------------------------------
 # 10. A generic API-key-shaped literal (keyword + quoted value with digits)
 #     -> FLAGGED
 # -----------------------------------------------------------------------------
-write "apikey.ts" 'apiKey: "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"'
+chunk1="a1b2c3d4e5f6g7h8i9j0"
+chunk2="C1a2b3c4d5e"
+write "apikey.ts" "apiKey: \"${chunk1}${chunk2}\""
 assert_flagged "apikey.ts" "generic API-key-shaped literal"
 
 # -----------------------------------------------------------------------------

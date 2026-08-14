@@ -38,7 +38,17 @@ export type AuditEventType =
   | 'project.reactivated'
   | 'project.rule.changed'
   | 'project.technology.changed'
-  | 'project.command.changed';
+  | 'project.command.changed'
+  | 'roadmap.milestone.created' | 'roadmap.milestone.updated' | 'roadmap.milestone.reordered'
+  | 'roadmap.milestone.blocked' | 'roadmap.milestone.completed' | 'roadmap.milestone.reopened'
+  | 'roadmap.milestone.status_changed' | 'roadmap.milestone.archived' | 'roadmap.milestone.reactivated'
+  | 'roadmap.task.created' | 'roadmap.task.updated' | 'roadmap.task.reordered' | 'roadmap.task.started'
+  | 'roadmap.task.blocked' | 'roadmap.task.unblocked' | 'roadmap.task.completed' | 'roadmap.task.reopened'
+  | 'roadmap.task.cancelled' | 'roadmap.task.status_changed'
+  | 'roadmap.acceptance.created' | 'roadmap.acceptance.updated' | 'roadmap.acceptance.completed'
+  | 'roadmap.acceptance.reopened' | 'roadmap.acceptance.reordered' | 'roadmap.acceptance.deleted'
+  | 'roadmap.dependency.added' | 'roadmap.dependency.removed' | 'roadmap.dependency.override'
+  | 'roadmap.note.created' | 'roadmap.note.updated' | 'roadmap.note.deleted';
 
 export type AuditEntry = {
   eventType: AuditEventType;
@@ -75,6 +85,15 @@ const FORBIDDEN_DETAIL_KEYS = new Set([
 ]);
 
 const MAX_DETAIL_STRING = 512;
+
+/** Bounded redaction for operator-authored text that must remain in history. */
+export function sanitiseAuditText(value: string): string {
+  return value
+    .replace(/-----BEGIN[\s\S]*?-----END[^-]*-----/gi, '[redacted credential block]')
+    .replace(/\b(password|passwd|token|secret|api[_-]?key|encryption[_-]?key)\s*[:=]\s*\S+/gi, '$1=[redacted]')
+    .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi, '$1[redacted]@')
+    .slice(0, 240);
+}
 
 /** Recursively strips forbidden keys and truncates long strings. */
 export function sanitiseDetail(input: Record<string, unknown>, depth = 0): Record<string, unknown> {
@@ -142,5 +161,18 @@ export class AuditLog {
         'failed to write audit event',
       );
     }
+  }
+
+  /**
+   * Writes an audit row and propagates failure. Use this inside the same
+   * transaction as a roadmap mutation whose success must never be unaudited.
+   */
+  async recordRequired(entry: AuditEntry, client: DbClient): Promise<void> {
+    await client.query(
+      `INSERT INTO audit_events (event_type, outcome, actor_user_id, request_id, subject, detail)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+      [entry.eventType, entry.outcome, entry.actorUserId ?? null, entry.requestId ?? null,
+       entry.subject ?? null, JSON.stringify(sanitiseDetail(entry.detail ?? {}))],
+    );
   }
 }

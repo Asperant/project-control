@@ -163,3 +163,29 @@ describe('response validation', () => {
     expect(error?.code).toBe('malformed_response');
   });
 });
+
+describe('roadmap client', () => {
+  it('uses the project-scoped milestone endpoint with CSRF', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      projectId: '00000000-0000-4000-8000-000000000001', readOnly: false,
+      progress: { completed: 0, total: 0, percentage: 0 }, milestones: [],
+    }, { status: 201 }));
+    await api.createMilestone('00000000-0000-4000-8000-000000000001', {
+      title: 'Production readiness', description: '', status: 'planned', priority: 'high',
+    });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/roadmap/milestones');
+    expect(init.method).toBe('POST');
+    expect((init.headers as Record<string, string>)['x-csrf-token']).toBe('c'.repeat(43));
+  });
+
+  it('preserves structured confirmation-required detail', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      error: { code: 'confirmation_required', message: '2 criteria incomplete.', confirmation: { kind: 'incomplete_acceptance', count: 2 } },
+      requestId: 'r'.repeat(8),
+    }, { status: 409 }));
+    await expect(api.changeRoadmapTaskStatus('p', 't', { status: 'done' })).rejects.toMatchObject({
+      code: 'confirmation_required', confirmation: { kind: 'incomplete_acceptance', count: 2 },
+    });
+  });
+});

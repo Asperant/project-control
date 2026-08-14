@@ -1,5 +1,24 @@
 # Troubleshooting
 
+## Roadmap changes are disabled
+
+Archived projects and archived/cancelled milestones are intentionally read-only.
+Reactivate the project or milestone, or reopen a cancelled milestone to
+`planned`. A viewer account is always read-only.
+
+## Roadmap confirmation is required
+
+The API returns HTTP 409 when a task is completed with unfinished acceptance
+criteria or started with unresolved dependencies. Review the count and use the
+explicit **continue anyway** action. Do not retry by sending a client-calculated
+count; the server recalculates state.
+
+## Dependency cannot be added
+
+Self, duplicate, cross-project, and circular dependencies are rejected. For a
+cycle, follow the existing dependency chain and remove the edge that points back
+to the task being edited.
+
 Start with:
 
 ```bash

@@ -14,6 +14,7 @@ export class AppError extends Error {
   readonly fields?: Array<{ path: string; message: string }>;
   /** Detail recorded in the log/audit trail but never sent to the client. */
   readonly internalDetail?: string;
+  readonly confirmation?: { kind: 'incomplete_acceptance' | 'incomplete_dependencies'; count: number };
 
   constructor(
     code: ErrorCode,
@@ -22,6 +23,7 @@ export class AppError extends Error {
       fields?: Array<{ path: string; message: string }>;
       internalDetail?: string;
       cause?: unknown;
+      confirmation?: { kind: 'incomplete_acceptance' | 'incomplete_dependencies'; count: number };
     } = {},
   ) {
     super(message, options.cause !== undefined ? { cause: options.cause } : undefined);
@@ -30,6 +32,7 @@ export class AppError extends Error {
     this.statusCode = errorCodeStatus[code];
     if (options.fields) this.fields = options.fields;
     if (options.internalDetail) this.internalDetail = options.internalDetail;
+    if (options.confirmation) this.confirmation = options.confirmation;
   }
 }
 
