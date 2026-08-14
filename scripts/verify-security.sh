@@ -400,6 +400,17 @@ if [[ -n "$(container_id postgres)" ]] && is_root; then
   else
     record_check PASS PGS-006 "backup_reader cannot write" "read-only enforced"
   fi
+
+  # Checkpoints are supposed to be immutable once created: control_app may only
+  # ever touch archived_at (see migrations/0008). This is a live proof, not
+  # just a static grant check — it actually attempts the forbidden write.
+  if docker exec -i "$pg_cid" env PGPASSWORD="$control_pw" \
+       psql -U control_app -d project_control -tAc \
+       "UPDATE project_checkpoints SET snapshot_json='{}'::jsonb WHERE false" >/dev/null 2>&1; then
+    record_check FAIL PGS-007 "control_app can modify checkpoint snapshot content" "checkpoint immutability is broken"
+  else
+    record_check PASS PGS-007 "control_app cannot modify checkpoint snapshot content" "immutability enforced at the privilege level"
+  fi
 else
   record_check SKIP PGS-001 "PostgreSQL role isolation" "requires root and a running postgres container"
 fi

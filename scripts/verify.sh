@@ -221,6 +221,34 @@ if [[ -n "$(container_id postgres)" ]] && is_root; then
   else
     record_check FAIL PG-012 "Roadmap role grants are too broad or incomplete" "review migrations/0006"
   fi
+
+  memory_tables="$(psql_super project_control "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('project_memory_entries','project_checkpoints')" || echo 0)"
+  if [[ "${memory_tables:-0}" == "2" ]]; then
+    record_check PASS PG-013 "Both memory/checkpoint tables exist" ""
+  else
+    record_check FAIL PG-013 "Expected 2 memory/checkpoint tables, found ${memory_tables}" ""
+  fi
+
+  memory_migrations="$(psql_super project_control "SELECT count(*) FROM schema_migrations WHERE version IN ('0007','0008')" || echo 0)"
+  if [[ "${memory_migrations:-0}" == "2" ]]; then
+    record_check PASS PG-014 "Memory migrations (0007, 0008) applied" ""
+  else
+    record_check FAIL PG-014 "Memory migrations not fully applied" "found ${memory_migrations}/2"
+  fi
+
+  memory_constraints="$(psql_super project_control "SELECT count(*) FROM pg_constraint WHERE conname IN ('project_memory_entries_not_self_superseded','project_memory_entries_pkey','project_checkpoints_pkey')" || echo 0)"
+  if [[ "${memory_constraints:-0}" == "3" ]]; then
+    record_check PASS PG-015 "Memory/checkpoint identity and self-supersede constraints exist" ""
+  else
+    record_check FAIL PG-015 "Memory/checkpoint constraints are incomplete" "found ${memory_constraints}/3"
+  fi
+
+  memory_acl="$(psql_super project_control "SELECT has_table_privilege('backup_reader','project_memory_entries','SELECT') AND has_table_privilege('backup_reader','project_checkpoints','SELECT') AND NOT has_table_privilege('backup_reader','project_memory_entries','INSERT,UPDATE,DELETE') AND NOT has_table_privilege('control_app','project_memory_entries','DELETE') AND NOT has_table_privilege('control_app','project_checkpoints','DELETE') AND has_column_privilege('control_app','project_checkpoints','archived_at','UPDATE') AND NOT has_column_privilege('control_app','project_checkpoints','snapshot_json','UPDATE') AND NOT has_column_privilege('control_app','project_checkpoints','session_note','UPDATE')" || echo f)"
+  if [[ "$memory_acl" == "t" ]]; then
+    record_check PASS PG-016 "Memory/checkpoint role grants preserve least privilege and checkpoint immutability" ""
+  else
+    record_check FAIL PG-016 "Memory/checkpoint role grants are too broad or incomplete" "review migrations/0008"
+  fi
 else
   record_check SKIP PG-001 "PostgreSQL checks" "requires root (to read secrets) and a running container"
 fi
@@ -271,6 +299,36 @@ if code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "${PORTAL}/api/
   fi
 else
   record_check FAIL API-006 "Roadmap endpoint is not routed through Caddy" ""
+fi
+
+if code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "${PORTAL}/api/projects/${ROADMAP_VERIFY_PROJECT}/memory" 2>/dev/null)"; then
+  if [[ "$code" == "401" ]]; then
+    record_check PASS API-007 "Memory endpoints require authentication" "HTTP 401"
+  else
+    record_check FAIL API-007 "Memory endpoint returned HTTP ${code}" "expected 401 for an anonymous request"
+  fi
+else
+  record_check FAIL API-007 "Memory endpoint is not routed through Caddy" ""
+fi
+
+if code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "${PORTAL}/api/projects/${ROADMAP_VERIFY_PROJECT}/checkpoints" 2>/dev/null)"; then
+  if [[ "$code" == "401" ]]; then
+    record_check PASS API-008 "Checkpoint endpoints require authentication" "HTTP 401"
+  else
+    record_check FAIL API-008 "Checkpoint endpoint returned HTTP ${code}" "expected 401 for an anonymous request"
+  fi
+else
+  record_check FAIL API-008 "Checkpoint endpoint is not routed through Caddy" ""
+fi
+
+if code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "${PORTAL}/api/projects/${ROADMAP_VERIFY_PROJECT}/context" 2>/dev/null)"; then
+  if [[ "$code" == "401" ]]; then
+    record_check PASS API-009 "Current-context endpoint requires authentication" "HTTP 401"
+  else
+    record_check FAIL API-009 "Context endpoint returned HTTP ${code}" "expected 401 for an anonymous request"
+  fi
+else
+  record_check FAIL API-009 "Context endpoint is not routed through Caddy" ""
 fi
 
 # Health endpoints must NOT be exposed through the proxy.

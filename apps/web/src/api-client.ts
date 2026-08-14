@@ -17,6 +17,25 @@ import {
   taskDetailMutationResponseSchema,
   roadmapActivityResponseSchema,
   systemStatusResponseSchema,
+  memoryListResponseSchema,
+  memoryEntryResponseSchema,
+  supersedeMemoryEntryResponseSchema,
+  checkpointListResponseSchema,
+  checkpointDetailResponseSchema,
+  checkpointSummaryResponseSchema,
+  projectContextResponseSchema,
+  type MemoryListResponse,
+  type MemoryEntryResponse,
+  type SupersedeMemoryEntryResponse,
+  type CheckpointListResponse,
+  type CheckpointDetailResponse,
+  type CheckpointSummaryResponse,
+  type ProjectContextResponse,
+  type CreateMemoryEntryRequest,
+  type UpdateMemoryEntryRequest,
+  type SupersedeMemoryEntryRequest,
+  type MemoryListQuery,
+  type CreateCheckpointRequest,
   type ApplyRescanRequest,
   type ApplyRescanResponse,
   type ArtifactSelfTestResponse,
@@ -332,4 +351,29 @@ export const api = {
   addNote(projectId:string,taskId:string,body:string){return request(`/api/projects/${projectId}/roadmap/tasks/${taskId}/notes`,taskDetailMutationResponseSchema,{method:'POST',body:{body}});},
   updateNote(projectId:string,taskId:string,noteId:string,body:string){return request(`/api/projects/${projectId}/roadmap/tasks/${taskId}/notes/${noteId}`,taskDetailMutationResponseSchema,{method:'PATCH',body:{body}});},
   deleteNote(projectId:string,taskId:string,noteId:string){return request(`/api/projects/${projectId}/roadmap/tasks/${taskId}/notes/${noteId}`,taskDetailMutationResponseSchema,{method:'DELETE'});},
+
+  // --- Memory ------------------------------------------------------------------
+  listMemory(projectId:string,query:Partial<MemoryListQuery> = {},signal?:AbortSignal):Promise<MemoryListResponse>{
+    const params=new URLSearchParams();
+    for(const [key,value] of Object.entries(query)){if(value===undefined||value==='')continue;params.set(key,String(value));}
+    const qs=params.toString();
+    return request(`/api/projects/${projectId}/memory${qs?`?${qs}`:''}`,memoryListResponseSchema,signal?{signal}:{});
+  },
+  getMemoryEntry(projectId:string,entryId:string):Promise<MemoryEntryResponse>{return request(`/api/projects/${projectId}/memory/${entryId}`,memoryEntryResponseSchema);},
+  createMemoryEntry(projectId:string,body:CreateMemoryEntryRequest):Promise<MemoryEntryResponse>{return request(`/api/projects/${projectId}/memory`,memoryEntryResponseSchema,{method:'POST',body});},
+  updateMemoryEntry(projectId:string,entryId:string,body:UpdateMemoryEntryRequest):Promise<MemoryEntryResponse>{return request(`/api/projects/${projectId}/memory/${entryId}`,memoryEntryResponseSchema,{method:'PATCH',body});},
+  pinMemoryEntry(projectId:string,entryId:string):Promise<MemoryEntryResponse>{return request(`/api/projects/${projectId}/memory/${entryId}/pin`,memoryEntryResponseSchema,{method:'POST'});},
+  unpinMemoryEntry(projectId:string,entryId:string):Promise<MemoryEntryResponse>{return request(`/api/projects/${projectId}/memory/${entryId}/unpin`,memoryEntryResponseSchema,{method:'POST'});},
+  archiveMemoryEntry(projectId:string,entryId:string):Promise<MemoryEntryResponse>{return request(`/api/projects/${projectId}/memory/${entryId}/archive`,memoryEntryResponseSchema,{method:'POST'});},
+  reactivateMemoryEntry(projectId:string,entryId:string):Promise<MemoryEntryResponse>{return request(`/api/projects/${projectId}/memory/${entryId}/reactivate`,memoryEntryResponseSchema,{method:'POST'});},
+  supersedeMemoryEntry(projectId:string,entryId:string,body:SupersedeMemoryEntryRequest):Promise<SupersedeMemoryEntryResponse>{return request(`/api/projects/${projectId}/memory/${entryId}/supersede`,supersedeMemoryEntryResponseSchema,{method:'POST',body});},
+
+  // --- Checkpoints ---------------------------------------------------------------
+  listCheckpoints(projectId:string,archived=false,signal?:AbortSignal):Promise<CheckpointListResponse>{return request(`/api/projects/${projectId}/checkpoints${archived?'?archived=true':''}`,checkpointListResponseSchema,signal?{signal}:{});},
+  getCheckpoint(projectId:string,checkpointId:string):Promise<CheckpointDetailResponse>{return request(`/api/projects/${projectId}/checkpoints/${checkpointId}`,checkpointDetailResponseSchema);},
+  createCheckpoint(projectId:string,body:CreateCheckpointRequest):Promise<CheckpointDetailResponse>{return request(`/api/projects/${projectId}/checkpoints`,checkpointDetailResponseSchema,{method:'POST',body});},
+  archiveCheckpoint(projectId:string,checkpointId:string):Promise<CheckpointSummaryResponse>{return request(`/api/projects/${projectId}/checkpoints/${checkpointId}/archive`,checkpointSummaryResponseSchema,{method:'POST'});},
+
+  // --- Current context / "Where was I?" -------------------------------------------
+  getProjectContext(projectId:string,signal?:AbortSignal):Promise<ProjectContextResponse>{return request(`/api/projects/${projectId}/context`,projectContextResponseSchema,signal?{signal}:{});},
 };

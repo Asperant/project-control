@@ -3,15 +3,16 @@ import type { Db, DbClient } from '../db/pool.js';
 import { withTransaction } from '../db/pool.js';
 import { AppError, notFound } from '../errors.js';
 import { sanitiseAuditText } from '../audit.js';
+import { getProjectGuard, assertProjectMutable as assertProjectMutableBase, type Executor } from '../projects/guard.js';
 import type {
   ChangeMilestoneStatusRequest, ChangeTaskStatusRequest, CreateMilestoneRequest, CreateTaskRequest,
   ProjectRoadmapResponse, RoadmapMilestone, RoadmapTask, TaskDetailResponse, UpdateMilestoneRequest,
   UpdateTaskRequest,
 } from '@project-control/contracts';
 
-type Executor = Db | DbClient;
+export type { Executor };
 export type MutationAudit = (client: DbClient, eventType: string, detail: Record<string, unknown>) => Promise<void>;
-type ProjectGuard = { id: string; status: string };
+export { getProjectGuard };
 type MilestoneRow = {
   id: string; project_id: string; title: string; description: string; status: RoadmapMilestone['status'];
   priority: RoadmapMilestone['priority']; sort_order: number; target_date: string | Date | null; blocked_reason: string | null;
@@ -54,13 +55,8 @@ function mapTask(row: TaskRow): RoadmapTask {
   };
 }
 
-export async function getProjectGuard(db: Executor, projectId: string, lock = false): Promise<ProjectGuard> {
-  const { rows } = await db.query<ProjectGuard>(`SELECT id, status FROM projects WHERE id=$1${lock ? ' FOR UPDATE' : ''}`, [projectId]);
-  if (!rows[0]) throw notFound('Project not found.');
-  return rows[0];
-}
-function assertProjectMutable(project: ProjectGuard): void {
-  if (project.status === 'archived') throw new AppError('conflict', 'This project is archived. Roadmap changes are disabled.');
+function assertProjectMutable(project: { id: string; status: string }): void {
+  assertProjectMutableBase(project, 'Roadmap');
 }
 async function getMilestone(db: Executor, projectId: string, milestoneId: string, lock = false): Promise<MilestoneRow> {
   const { rows } = await db.query<MilestoneRow>(`SELECT * FROM roadmap_milestones WHERE id=$1 AND project_id=$2${lock ? ' FOR UPDATE' : ''}`, [milestoneId, projectId]);

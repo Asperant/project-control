@@ -13,6 +13,7 @@ import { systemRoutes } from './routes/system.js';
 import { artifactRoutes } from './routes/artifacts.js';
 import { projectRoutes } from './routes/projects.js';
 import { roadmapRoutes } from './routes/roadmap.js';
+import { memoryRoutes } from './routes/memory.js';
 
 /**
  * Builds the Fastify instance.
@@ -203,6 +204,7 @@ export async function buildApp(ctx: AppContext) {
   await app.register(artifactRoutes(ctx));
   await app.register(projectRoutes(ctx));
   await app.register(roadmapRoutes(ctx));
+  await app.register(memoryRoutes(ctx));
 
   return app;
 }

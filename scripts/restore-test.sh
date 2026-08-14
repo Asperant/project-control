@@ -208,7 +208,7 @@ restore_and_check() {
   log_ok "${database}: all expected tables present (${#expected_tables[@]})"
 }
 
-restore_and_check project_control users sessions audit_events schema_migrations system_settings artifact_objects projects roadmap_milestones roadmap_tasks task_acceptance_criteria task_dependencies task_notes
+restore_and_check project_control users sessions audit_events schema_migrations system_settings artifact_objects projects roadmap_milestones roadmap_tasks task_acceptance_criteria task_dependencies task_notes project_memory_entries project_checkpoints
 
 # n8n owns its own schema, so the table list is not asserted; the check is that
 # the dump loads and contains something.
@@ -241,6 +241,32 @@ if [[ "${roadmap_constraints:-0}" == "10" ]]; then
   log_ok "project_control: roadmap relationships and uniqueness constraints restored"
 else
   fail "restored project_control is missing roadmap constraints (${roadmap_constraints}/10)"
+fi
+
+memory_constraints="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM pg_constraint WHERE conname IN ('project_memory_entries_project_id_fkey','project_memory_entries_not_self_superseded','project_memory_entries_pkey','project_checkpoints_project_id_fkey','project_checkpoints_pkey')" 2>/dev/null || echo 0)"
+if [[ "${memory_constraints:-0}" == "5" ]]; then
+  log_ok "project_control: memory/checkpoint relationships and constraints restored"
+else
+  fail "restored project_control is missing memory/checkpoint constraints (${memory_constraints}/5)"
+fi
+
+# Row-level sanity for checkpoints: if any survived the backup, their snapshot
+# content must still be valid jsonb after the restore. On a fresh install
+# there may be zero rows, which is not itself a failure.
+checkpoint_rows="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc "SELECT count(*) FROM project_checkpoints" 2>/dev/null || echo 0)"
+if [[ "${checkpoint_rows:-0}" -gt 0 ]]; then
+  invalid_snapshots="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+    psql -U postgres -d project_control -tAc "SELECT count(*) FROM project_checkpoints WHERE snapshot_json IS NULL OR jsonb_typeof(snapshot_json) <> 'object'" 2>/dev/null || echo 0)"
+  if [[ "${invalid_snapshots:-0}" == "0" ]]; then
+    log_ok "project_control: ${checkpoint_rows} checkpoint(s) restored with valid snapshot content"
+  else
+    fail "restored project_control has ${invalid_snapshots}/${checkpoint_rows} checkpoints with invalid snapshot content"
+  fi
+else
+  log_warn "no checkpoints in this snapshot to verify (fresh deployment)"
 fi
 
 # =============================================================================

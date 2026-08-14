@@ -48,7 +48,10 @@ export type AuditEventType =
   | 'roadmap.acceptance.created' | 'roadmap.acceptance.updated' | 'roadmap.acceptance.completed'
   | 'roadmap.acceptance.reopened' | 'roadmap.acceptance.reordered' | 'roadmap.acceptance.deleted'
   | 'roadmap.dependency.added' | 'roadmap.dependency.removed' | 'roadmap.dependency.override'
-  | 'roadmap.note.created' | 'roadmap.note.updated' | 'roadmap.note.deleted';
+  | 'roadmap.note.created' | 'roadmap.note.updated' | 'roadmap.note.deleted'
+  | 'memory.created' | 'memory.updated' | 'memory.pinned' | 'memory.unpinned'
+  | 'memory.archived' | 'memory.reactivated' | 'memory.superseded'
+  | 'checkpoint.created' | 'checkpoint.archived';
 
 export type AuditEntry = {
   eventType: AuditEventType;

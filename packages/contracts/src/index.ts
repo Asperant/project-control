@@ -16,4 +16,5 @@ export * from './system.js';
 export * from './artifacts.js';
 export * from './projects.js';
 export * from './roadmap.js';
+export * from './memory.js';
 export * from './errors.js';

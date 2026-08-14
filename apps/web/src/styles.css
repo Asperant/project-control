@@ -266,6 +266,46 @@ button.primary {
 .note p { white-space:pre-wrap; overflow-wrap:anywhere; }
 @media (max-width:640px){.roadmap-task-row,.roadmap-activity li{align-items:stretch;flex-direction:column}.roadmap-view button,.roadmap-view select,.roadmap-view input[type="checkbox"],.task-detail button,.task-detail select{min-height:44px}.task-detail .card{padding:.8rem}.roadmap-progress progress{width:100%}}
 
+/* --- Memory / checkpoints --------------------------------------------------- */
+.memory-view { display:grid; gap:1rem; }
+.memory-view section + section { margin-top:0; }
+.memory-form { display:grid; gap:.65rem; margin-top:.75rem; }
+.memory-pin-toggle { display:flex; align-items:center; gap:.4rem; font-size:.85rem; }
+.memory-toolbar { display:grid; gap:.6rem; margin:.5rem 0 .75rem; }
+.memory-toolbar input[type="search"] { width:100%; }
+.memory-filters { display:flex; flex-wrap:wrap; gap:.4rem; }
+.memory-filters .chip { border:0; }
+.chip-active { background:var(--accent); color:var(--accent-contrast); border-color:var(--accent); }
+.memory-list { list-style:none; margin:0; padding:0; display:grid; gap:.75rem; }
+.memory-card { gap:.5rem; }
+.memory-badges { display:flex; gap:.35rem; flex-wrap:wrap; align-items:center; }
+.memory-body { white-space:pre-wrap; overflow-wrap:anywhere; }
+.memory-importance-critical { border-color:var(--down); }
+.memory-importance-important { border-color:var(--warn); }
+.memory-supersede { border-top:1px solid var(--border); padding-top:.75rem; margin-top:.5rem; }
+
+.context-section { padding:.5rem 0; border-top:1px solid var(--border); }
+.context-section:first-child { border-top:0; padding-top:0; }
+.context-section-title { font-weight:650; font-size:.85rem; }
+.context-grid { display:grid; gap:0; margin-top:.5rem; }
+
+.checkpoint-filter { display:flex; align-items:center; gap:.4rem; font-size:.8rem; color:var(--text-muted); }
+.checkpoint-history { list-style:none; margin:.5rem 0 0; padding:0; display:grid; gap:.4rem; }
+.checkpoint-history li { display:flex; align-items:center; justify-content:space-between; gap:.5rem; border-bottom:1px solid var(--border); padding:.4rem 0; flex-wrap:wrap; }
+.checkpoint-open { flex:1; display:flex; flex-direction:column; align-items:flex-start; gap:.15rem; border:0; background:transparent; padding:.25rem; text-align:left; min-width:12rem; }
+.checkpoint-open time { font-family:var(--mono); font-size:.8rem; color:var(--text-muted); }
+
+.checkpoint-dialog-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex; align-items:flex-start; justify-content:center; padding:2rem 1rem; overflow-y:auto; z-index:50; }
+.checkpoint-dialog { max-width:40rem; width:100%; max-height:calc(100vh - 4rem); overflow-y:auto; }
+
+@media (max-width:640px){
+  .memory-view button,.memory-view select,.memory-view input[type="checkbox"],.memory-view input[type="search"],.memory-view textarea{min-height:44px}
+  .memory-view .card{padding:.8rem}
+  .checkpoint-history li{flex-direction:column;align-items:stretch}
+  .checkpoint-dialog-backdrop{padding:.5rem}
+  .checkpoint-dialog{max-height:calc(100vh - 1rem)}
+}
+
 /* --- Forms ----------------------------------------------------------------- */
 .login-wrap {
   min-height: 100dvh;
