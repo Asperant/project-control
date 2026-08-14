@@ -216,6 +216,63 @@ container_health() {
   docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$cid" 2>/dev/null || echo "unknown"
 }
 
+# --- Deployment readiness -----------------------------------------------------
+# wait_for_api_route <url> <expected_code> [timeout_seconds=90] [interval_seconds=2]
+#
+# Polls <url> through the real production path (Caddy -> Control API) until it
+# returns <expected_code>, treating the specific "still starting" signatures —
+# HTTP 503 (Caddy is up but has no healthy upstream yet) and a hard connection
+# failure (curl's "000", e.g. connection refused/reset while the upstream is
+# still binding its listener) — as retryable within a bounded deadline.
+#
+# Docker's own Healthy status (`compose up --wait`) proves the container
+# process is alive and passed its own healthcheck; it does NOT prove Caddy's
+# reverse-proxy upstream connection to it is ready yet. That gap is exactly
+# what produces a transient 503 immediately after "Healthy" — this function
+# closes that gap without weakening what counts as success.
+#
+# Any other response — including an unexpected 200 where <expected_code> is
+# 401, any 4xx other than the expected one, or a non-503 5xx — is treated as
+# terminal and returned immediately without retrying: those are not "still
+# starting" signatures, they are real failures (a possible auth regression, a
+# misconfigured route, or a genuinely broken upstream), and retrying them away
+# would hide exactly the kind of bug this stack's health gate exists to catch.
+#
+# Returns 0 the moment <expected_code> is observed. Returns 1 on a terminal
+# response, or once the deadline passes while only retryable responses have
+# been seen — this is a bounded poll, never an infinite loop.
+wait_for_api_route() {
+  local url="$1" expected="$2" timeout="${3:-90}" interval="${4:-2}"
+  local deadline started attempt=0 code
+  started="$(date +%s)"
+  deadline=$(( started + timeout ))
+
+  while true; do
+    attempt=$((attempt+1))
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "$url" 2>/dev/null || echo 000)"
+
+    if [[ "$code" == "$expected" ]]; then
+      log_ok "API route ready: ${url} returned HTTP ${code} (attempt ${attempt}, $(( $(date +%s) - started ))s)"
+      return 0
+    fi
+
+    case "$code" in
+      503|000)
+        if (( $(date +%s) >= deadline )); then
+          log_error "API route did not become ready within ${timeout}s: ${url} last returned HTTP ${code} (expected ${expected}, ${attempt} attempt(s))"
+          return 1
+        fi
+        log_info "waiting for API route readiness (${code}, attempt ${attempt}) — ${url}"
+        sleep "$interval"
+        ;;
+      *)
+        log_error "API route returned HTTP ${code} (expected ${expected}) — not a startup-race signature, failing immediately — ${url}"
+        return 1
+        ;;
+    esac
+  done
+}
+
 # --- Reporting ---------------------------------------------------------------
 # Machine-readable check accumulation used by verify / preflight.
 PC_CHECK_PASS=0

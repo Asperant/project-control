@@ -3,7 +3,8 @@ import type { Executor } from '../projects/guard.js';
 import { getProjectGuard } from '../projects/guard.js';
 import { listMemory } from '../memory/store.js';
 import { getLastActiveCheckpoint } from '../checkpoints/store.js';
-import { loadRawProjectData } from '../checkpoints/snapshot.js';
+import { loadRawProjectData, RECENT_AGENT_ACTIVITY_LIMIT } from '../checkpoints/snapshot.js';
+import { loadRecentAgentActivity } from '../agent-runs/snapshot.js';
 
 /**
  * Deterministic "Current context / Where was I?" composition.
@@ -29,6 +30,18 @@ const CHANGE_CATEGORIES: Record<string, ChangeCategory> = {
   'memory.superseded': { prefix: '~', label: (n) => `${n} memory entr${n === 1 ? 'y' : 'ies'} superseded` },
   'memory.archived': { prefix: '-', label: (n) => `${n} memory entr${n === 1 ? 'y' : 'ies'} archived` },
   'checkpoint.archived': { prefix: '-', label: (n) => `${n} checkpoint${n === 1 ? '' : 's'} archived` },
+  'agentrun.sent': { prefix: '+', label: (n) => `${n} agent run${n === 1 ? '' : 's'} sent` },
+  'agentrun.completed': { prefix: '✓', label: (n) => `${n} agent run${n === 1 ? '' : 's'} completed` },
+  'agentrun.failed': { prefix: '!', label: (n) => `${n} agent run${n === 1 ? '' : 's'} failed` },
+  'agentrun.cancelled': { prefix: '✕', label: (n) => `${n} agent run${n === 1 ? '' : 's'} cancelled` },
+  'agentreport.finalized': { prefix: '+', label: (n) => `${n} agent report${n === 1 ? '' : 's'} finalized` },
+  'agentrun.memory_promoted': { prefix: '+', label: (n) => `${n} finding${n === 1 ? '' : 's'} promoted to memory` },
+  // agentvalidation.updated is one event type covering five possible target
+  // statuses; the query below buckets it by detail->>'newStatus' so "accepted"
+  // and "rejected" are counted (and labelled) separately rather than merged.
+  'agentvalidation.updated:accepted': { prefix: '✓', label: (n) => `${n} validation${n === 1 ? '' : 's'} accepted` },
+  'agentvalidation.updated:accepted_with_changes': { prefix: '✓', label: (n) => `${n} validation${n === 1 ? '' : 's'} accepted with changes` },
+  'agentvalidation.updated:rejected': { prefix: '✕', label: (n) => `${n} validation${n === 1 ? '' : 's'} rejected` },
 };
 
 async function computeChangesSinceCheckpoint(
@@ -38,14 +51,23 @@ async function computeChangesSinceCheckpoint(
     return { hasCheckpoint: false, sinceCheckpointId: null, sinceCreatedAt: null, items: [] };
   }
 
-  const { rows } = await db.query<{ event_type: string; count: string }>(
-    `SELECT event_type, count(*) AS count
+  const { rows } = await db.query<{ bucket_key: string; count: string }>(
+    `SELECT
+        CASE WHEN event_type = 'agentvalidation.updated'
+             THEN 'agentvalidation.updated:' || COALESCE(detail->>'newStatus', 'other')
+             ELSE event_type
+        END AS bucket_key,
+        count(*) AS count
        FROM audit_events
       WHERE occurred_at > $1
         AND event_type <> 'checkpoint.created'
-        AND (event_type LIKE 'roadmap.%' OR event_type LIKE 'memory.%' OR event_type = 'checkpoint.archived')
+        AND (
+          event_type LIKE 'roadmap.%' OR event_type LIKE 'memory.%' OR event_type = 'checkpoint.archived'
+          OR event_type IN ('agentrun.sent','agentrun.completed','agentrun.failed','agentrun.cancelled',
+                             'agentreport.finalized','agentrun.memory_promoted','agentvalidation.updated')
+        )
         AND detail->>'projectId' = $2
-      GROUP BY event_type`,
+      GROUP BY bucket_key`,
     [since.createdAt, projectId],
   );
 
@@ -54,9 +76,9 @@ async function computeChangesSinceCheckpoint(
   for (const row of rows) {
     const count = Number(row.count);
     if (count <= 0) continue;
-    const category = CHANGE_CATEGORIES[row.event_type];
+    const category = CHANGE_CATEGORIES[row.bucket_key];
     if (category) {
-      items.push({ key: row.event_type, label: `${category.prefix} ${category.label(count)}`, count });
+      items.push({ key: row.bucket_key, label: `${category.prefix} ${category.label(count)}`, count });
     } else {
       otherCount += count;
     }
@@ -74,10 +96,11 @@ async function computeChangesSinceCheckpoint(
 
 export async function getProjectContext(db: Executor, projectId: string): Promise<ProjectContextResponse> {
   await getProjectGuard(db, projectId);
-  const [raw, pinnedContext, lastCheckpoint] = await Promise.all([
+  const [raw, pinnedContext, lastCheckpoint, recentAgentWork] = await Promise.all([
     loadRawProjectData(db, projectId),
     listMemory(db, projectId, { pinned: 'true' }),
     getLastActiveCheckpoint(db, projectId),
+    loadRecentAgentActivity(db, projectId, RECENT_AGENT_ACTIVITY_LIMIT),
   ]);
   const changesSinceCheckpoint = await computeChangesSinceCheckpoint(db, projectId, lastCheckpoint);
 
@@ -90,6 +113,7 @@ export async function getProjectContext(db: Executor, projectId: string): Promis
     pendingAcceptance: raw.pendingAcceptance,
     unresolvedDependencies: raw.unresolvedDependencies,
     pinnedContext,
+    recentAgentWork,
     lastCheckpoint,
     changesSinceCheckpoint,
   };

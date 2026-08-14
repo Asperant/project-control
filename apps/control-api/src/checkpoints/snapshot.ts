@@ -1,5 +1,9 @@
 import type { CheckpointSnapshot, RoadmapPriority, RoadmapStatus } from '@project-control/contracts';
 import type { Executor } from '../projects/guard.js';
+import { loadRecentAgentActivity } from '../agent-runs/snapshot.js';
+
+/** How many recent Agent Run entries a checkpoint snapshot / live context carries. */
+export const RECENT_AGENT_ACTIVITY_LIMIT = 5;
 
 /**
  * The single, shared read of "what does this project's roadmap look like
@@ -157,9 +161,11 @@ export async function buildCheckpointSnapshot(
   const importantMemoryRaw = await loadImportantMemorySnapshot(db, projectId);
   const pinnedIds = new Set(pinnedMemory.map((m) => m.id));
   const importantMemory = importantMemoryRaw.filter((m) => !pinnedIds.has(m.id));
+  const recentAgentActivity = await loadRecentAgentActivity(db, projectId, RECENT_AGENT_ACTIVITY_LIMIT);
 
   return {
-    version: 1,
+    version: 2,
+    recentAgentActivity,
     projectId,
     projectName: project.name,
     projectStatus: project.status,

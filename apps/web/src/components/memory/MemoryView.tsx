@@ -246,6 +246,16 @@ function CurrentContextCard({ context, expanded, onToggle }: { context: ProjectC
           <Section title="Pinned context" empty={context.pinnedContext.length === 0}>
             <ul className="steps">{context.pinnedContext.map((e) => <li key={e.id}><span className="step-name">[{e.type}] {e.title}</span></li>)}</ul>
           </Section>
+          <Section title="Recent Agent Work" empty={context.recentAgentWork.length === 0}>
+            <ul className="steps">
+              {context.recentAgentWork.map((a) => (
+                <li key={a.agentRunId}>
+                  <span className="step-name">{a.agentName} — {a.title}</span>
+                  <span>{a.status.replace(/_/g, ' ')} · {a.validationStatus.replace(/_/g, ' ')}</span>
+                </li>
+              ))}
+            </ul>
+          </Section>
           <Section title="Since your last checkpoint" empty={!context.changesSinceCheckpoint.hasCheckpoint || context.changesSinceCheckpoint.items.length === 0}>
             {!context.changesSinceCheckpoint.hasCheckpoint ? (
               <p className="hint">Save a checkpoint to start tracking changes between sessions.</p>
@@ -445,6 +455,7 @@ function MemoryCard({
       )}
       {entry.status === 'superseded' && entry.supersededByTitle && <p className="card-meta">Superseded by: {entry.supersededByTitle}</p>}
       {entry.supersedesIds.length > 0 && <p className="card-meta">Supersedes {entry.supersedesIds.length} earlier entr{entry.supersedesIds.length === 1 ? 'y' : 'ies'}</p>}
+      {entry.sourceAgentRunId && <p className="card-meta">Source: Agent Run — {entry.sourceAgentRunTitle}</p>}
       <p className="card-meta">{formatTime(entry.createdAt)}</p>
       {writable && (
         <div className="roadmap-actions">

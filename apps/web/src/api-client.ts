@@ -24,6 +24,32 @@ import {
   checkpointDetailResponseSchema,
   checkpointSummaryResponseSchema,
   projectContextResponseSchema,
+  agentRunListResponseSchema,
+  agentRunResponseSchema,
+  agentRunPromptResponseSchema,
+  sendAgentRunPromptResponseSchema,
+  agentReportListResponseSchema,
+  agentReportResponseSchema,
+  finalizeAgentReportResponseSchema,
+  agentRunTimelineResponseSchema,
+  duplicateAgentRunResponseSchema,
+  type AgentRunListResponse,
+  type AgentRunResponse,
+  type AgentRunPromptResponse,
+  type SendAgentRunPromptResponse,
+  type AgentReportListResponse,
+  type AgentReportResponse,
+  type FinalizeAgentReportResponse,
+  type AgentRunTimelineResponse,
+  type DuplicateAgentRunResponse,
+  type AgentRunListQuery,
+  type CreateAgentRunRequest,
+  type UpdateAgentRunRequest,
+  type SetAgentRunStatusRequest,
+  type UpsertAgentRunPromptRequest,
+  type CreateAgentReportRequest,
+  type UpdateAgentReportRequest,
+  type UpdateAgentRunValidationRequest,
   type MemoryListResponse,
   type MemoryEntryResponse,
   type SupersedeMemoryEntryResponse,
@@ -376,4 +402,34 @@ export const api = {
 
   // --- Current context / "Where was I?" -------------------------------------------
   getProjectContext(projectId:string,signal?:AbortSignal):Promise<ProjectContextResponse>{return request(`/api/projects/${projectId}/context`,projectContextResponseSchema,signal?{signal}:{});},
+
+  // --- Agent Runs ----------------------------------------------------------------
+  listAgentRuns(projectId:string,query:Partial<AgentRunListQuery> = {},signal?:AbortSignal):Promise<AgentRunListResponse>{
+    const params=new URLSearchParams();
+    for(const [key,value] of Object.entries(query)){if(value===undefined||value==='')continue;params.set(key,String(value));}
+    const qs=params.toString();
+    return request(`/api/projects/${projectId}/agent-runs${qs?`?${qs}`:''}`,agentRunListResponseSchema,signal?{signal}:{});
+  },
+  getAgentRun(projectId:string,runId:string,signal?:AbortSignal):Promise<AgentRunResponse>{return request(`/api/projects/${projectId}/agent-runs/${runId}`,agentRunResponseSchema,signal?{signal}:{});},
+  createAgentRun(projectId:string,body:CreateAgentRunRequest):Promise<AgentRunResponse>{return request(`/api/projects/${projectId}/agent-runs`,agentRunResponseSchema,{method:'POST',body});},
+  updateAgentRun(projectId:string,runId:string,body:UpdateAgentRunRequest):Promise<AgentRunResponse>{return request(`/api/projects/${projectId}/agent-runs/${runId}`,agentRunResponseSchema,{method:'PATCH',body});},
+  setAgentRunStatus(projectId:string,runId:string,body:SetAgentRunStatusRequest):Promise<AgentRunResponse>{return request(`/api/projects/${projectId}/agent-runs/${runId}/status`,agentRunResponseSchema,{method:'POST',body});},
+  archiveAgentRun(projectId:string,runId:string):Promise<AgentRunResponse>{return request(`/api/projects/${projectId}/agent-runs/${runId}/archive`,agentRunResponseSchema,{method:'POST'});},
+  reactivateAgentRun(projectId:string,runId:string):Promise<AgentRunResponse>{return request(`/api/projects/${projectId}/agent-runs/${runId}/reactivate`,agentRunResponseSchema,{method:'POST'});},
+  duplicateAgentRun(projectId:string,runId:string):Promise<DuplicateAgentRunResponse>{return request(`/api/projects/${projectId}/agent-runs/${runId}/duplicate`,duplicateAgentRunResponseSchema,{method:'POST'});},
+
+  getAgentRunPrompt(projectId:string,runId:string,signal?:AbortSignal):Promise<AgentRunPromptResponse>{return request(`/api/projects/${projectId}/agent-runs/${runId}/prompt`,agentRunPromptResponseSchema,signal?{signal}:{});},
+  updateAgentRunPrompt(projectId:string,runId:string,body:UpsertAgentRunPromptRequest):Promise<AgentRunPromptResponse>{return request(`/api/projects/${projectId}/agent-runs/${runId}/prompt`,agentRunPromptResponseSchema,{method:'PATCH',body});},
+  sendAgentRunPrompt(projectId:string,runId:string):Promise<SendAgentRunPromptResponse>{return request(`/api/projects/${projectId}/agent-runs/${runId}/prompt/send`,sendAgentRunPromptResponseSchema,{method:'POST'});},
+
+  listAgentReports(projectId:string,runId:string,signal?:AbortSignal):Promise<AgentReportListResponse>{return request(`/api/projects/${projectId}/agent-runs/${runId}/reports`,agentReportListResponseSchema,signal?{signal}:{});},
+  createAgentReport(projectId:string,runId:string,body:CreateAgentReportRequest):Promise<AgentReportResponse>{return request(`/api/projects/${projectId}/agent-runs/${runId}/reports`,agentReportResponseSchema,{method:'POST',body});},
+  updateAgentReport(projectId:string,runId:string,reportId:string,body:UpdateAgentReportRequest):Promise<AgentReportResponse>{return request(`/api/projects/${projectId}/agent-runs/${runId}/reports/${reportId}`,agentReportResponseSchema,{method:'PATCH',body});},
+  finalizeAgentReport(projectId:string,runId:string,reportId:string):Promise<FinalizeAgentReportResponse>{return request(`/api/projects/${projectId}/agent-runs/${runId}/reports/${reportId}/finalize`,finalizeAgentReportResponseSchema,{method:'POST'});},
+
+  updateAgentRunValidation(projectId:string,runId:string,body:UpdateAgentRunValidationRequest):Promise<AgentRunResponse>{return request(`/api/projects/${projectId}/agent-runs/${runId}/validation`,agentRunResponseSchema,{method:'PATCH',body});},
+
+  getAgentRunTimeline(projectId:string,runId:string,signal?:AbortSignal):Promise<AgentRunTimelineResponse>{return request(`/api/projects/${projectId}/agent-runs/${runId}/timeline`,agentRunTimelineResponseSchema,signal?{signal}:{});},
+  getRelatedMemory(projectId:string,runId:string,signal?:AbortSignal):Promise<MemoryListResponse>{return request(`/api/projects/${projectId}/agent-runs/${runId}/related-memory`,memoryListResponseSchema,signal?{signal}:{});},
+  promoteAgentRunToMemory(projectId:string,runId:string,body:CreateMemoryEntryRequest):Promise<MemoryEntryResponse>{return request(`/api/projects/${projectId}/agent-runs/${runId}/promote-memory`,memoryEntryResponseSchema,{method:'POST',body});},
 };

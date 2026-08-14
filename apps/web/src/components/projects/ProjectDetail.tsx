@@ -11,6 +11,7 @@ import { ApiError, api } from '../../api-client';
 import { AccessibilityBadge, ProjectPriorityBadge, ProjectStatusBadge, formatRelativeTime } from './badges';
 import { RoadmapView } from '../roadmap/RoadmapView';
 import { MemoryView } from '../memory/MemoryView';
+import { AgentRunsView } from '../agent-runs/AgentRunsView';
 
 export function ProjectDetail({
   projectId,
@@ -29,7 +30,7 @@ export function ProjectDetail({
   const [activity, setActivity] = useState<ProjectActivityEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [view, setView] = useState<'overview' | 'roadmap' | 'memory'>('overview');
+  const [view, setView] = useState<'overview' | 'roadmap' | 'memory' | 'agent-runs'>('overview');
 
   const [editingInfo, setEditingInfo] = useState(false);
   const [form, setForm] = useState<{
@@ -212,12 +213,15 @@ export function ProjectDetail({
         <button type="button" aria-current={view === 'overview' ? 'page' : undefined} onClick={() => setView('overview')}>Overview</button>
         <button type="button" aria-current={view === 'roadmap' ? 'page' : undefined} onClick={() => setView('roadmap')}>Roadmap</button>
         <button type="button" aria-current={view === 'memory' ? 'page' : undefined} onClick={() => setView('memory')}>Memory</button>
+        <button type="button" aria-current={view === 'agent-runs' ? 'page' : undefined} onClick={() => setView('agent-runs')}>Agent Runs</button>
       </nav>
 
       {view === 'roadmap' ? (
         <RoadmapView projectId={projectId} canWrite={canWrite} archived={project.status === 'archived'} onSessionExpired={onSessionExpired} />
       ) : view === 'memory' ? (
         <MemoryView projectId={projectId} canWrite={canWrite} archived={project.status === 'archived'} onSessionExpired={onSessionExpired} />
+      ) : view === 'agent-runs' ? (
+        <AgentRunsView projectId={projectId} canWrite={canWrite} archived={project.status === 'archived'} onSessionExpired={onSessionExpired} />
       ) : <>
 
       <article className="card">

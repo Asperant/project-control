@@ -249,6 +249,49 @@ if [[ -n "$(container_id postgres)" ]] && is_root; then
   else
     record_check FAIL PG-016 "Memory/checkpoint role grants are too broad or incomplete" "review migrations/0008"
   fi
+  agent_run_tables="$(psql_super project_control "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('agent_runs','agent_run_prompts','agent_reports')" || echo 0)"
+  if [[ "${agent_run_tables:-0}" == "3" ]]; then
+    record_check PASS PG-017 "All three Agent Run tables exist" ""
+  else
+    record_check FAIL PG-017 "Expected 3 Agent Run tables, found ${agent_run_tables}" ""
+  fi
+
+  agent_run_migrations="$(psql_super project_control "SELECT count(*) FROM schema_migrations WHERE version IN ('0009','0010')" || echo 0)"
+  if [[ "${agent_run_migrations:-0}" == "2" ]]; then
+    record_check PASS PG-018 "Agent Run migrations (0009, 0010) applied" ""
+  else
+    record_check FAIL PG-018 "Agent Run migrations not fully applied" "found ${agent_run_migrations}/2"
+  fi
+
+  agent_run_constraints="$(psql_super project_control "SELECT count(*) FROM pg_constraint WHERE conname IN ('agent_runs_pkey','agent_run_prompts_one_per_run','agent_reports_run_version_key','agent_reports_not_self_superseded','agent_reports_not_self_supersedes')" || echo 0)"
+  if [[ "${agent_run_constraints:-0}" == "5" ]]; then
+    record_check PASS PG-019 "Agent Run identity, one-prompt-per-run and self-supersede constraints exist" ""
+  else
+    record_check FAIL PG-019 "Agent Run constraints are incomplete" "found ${agent_run_constraints}/5"
+  fi
+
+  agent_run_provenance_fk="$(psql_super project_control "SELECT count(*) FROM pg_constraint WHERE conrelid = 'project_memory_entries'::regclass AND confrelid = 'agent_runs'::regclass" || echo 0)"
+  if [[ "${agent_run_provenance_fk:-0}" -ge "1" ]]; then
+    record_check PASS PG-020 "project_memory_entries.source_agent_run_id references agent_runs" ""
+  else
+    record_check FAIL PG-020 "Memory-provenance foreign key to agent_runs is missing" ""
+  fi
+
+  agent_run_acl="$(psql_super project_control "SELECT has_table_privilege('backup_reader','agent_runs','SELECT') AND has_table_privilege('backup_reader','agent_run_prompts','SELECT') AND has_table_privilege('backup_reader','agent_reports','SELECT') AND NOT has_table_privilege('backup_reader','agent_runs','INSERT,UPDATE,DELETE') AND NOT has_table_privilege('control_app','agent_runs','DELETE') AND NOT has_table_privilege('control_app','agent_run_prompts','DELETE') AND NOT has_table_privilege('control_app','agent_reports','DELETE')" || echo f)"
+  if [[ "$agent_run_acl" == "t" ]]; then
+    record_check PASS PG-021 "Agent Run role grants preserve least privilege" ""
+  else
+    record_check FAIL PG-021 "Agent Run role grants are too broad or incomplete" "review migrations/0010"
+  fi
+
+  # Conditional immutability (draft-then-frozen) can't be expressed as a GRANT,
+  # so it's a BEFORE UPDATE trigger instead — confirm both are attached and enabled.
+  agent_run_triggers="$(psql_super project_control "SELECT count(*) FROM pg_trigger WHERE tgname IN ('agent_run_prompts_guard_immutable','agent_reports_guard_immutable') AND tgenabled <> 'D'" || echo 0)"
+  if [[ "${agent_run_triggers:-0}" == "2" ]]; then
+    record_check PASS PG-022 "Prompt/report immutability triggers exist and are enabled" ""
+  else
+    record_check FAIL PG-022 "Prompt/report immutability triggers are missing or disabled" "found ${agent_run_triggers}/2"
+  fi
 else
   record_check SKIP PG-001 "PostgreSQL checks" "requires root (to read secrets) and a running container"
 fi
@@ -329,6 +372,16 @@ if code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "${PORTAL}/api/
   fi
 else
   record_check FAIL API-009 "Context endpoint is not routed through Caddy" ""
+fi
+
+if code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "${PORTAL}/api/projects/${ROADMAP_VERIFY_PROJECT}/agent-runs" 2>/dev/null)"; then
+  if [[ "$code" == "401" ]]; then
+    record_check PASS API-010 "Agent Run endpoints require authentication" "HTTP 401"
+  else
+    record_check FAIL API-010 "Agent Run endpoint returned HTTP ${code}" "expected 401 for an anonymous request"
+  fi
+else
+  record_check FAIL API-010 "Agent Run endpoint is not routed through Caddy" ""
 fi
 
 # Health endpoints must NOT be exposed through the proxy.

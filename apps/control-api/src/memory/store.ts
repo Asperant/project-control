@@ -21,16 +21,19 @@ type MemoryRow = {
   related_milestone_id: string | null; related_milestone_title: string | null;
   superseded_by_id: string | null; superseded_by_title: string | null;
   supersedes_ids: string[] | null;
+  source_agent_run_id: string | null; source_agent_run_title: string | null;
   archived_at: Date | null; created_by: string | null; created_at: Date; updated_at: Date;
 };
 
 const SELECT_ENTRY = `
   SELECT e.*, rt.title related_task_title, rm.title related_milestone_title, sb.title superseded_by_title,
+    sar.title source_agent_run_title,
     (SELECT array_agg(p.id ORDER BY p.created_at) FROM project_memory_entries p WHERE p.superseded_by_id = e.id) supersedes_ids
   FROM project_memory_entries e
   LEFT JOIN roadmap_tasks rt ON rt.id = e.related_task_id
   LEFT JOIN roadmap_milestones rm ON rm.id = e.related_milestone_id
   LEFT JOIN project_memory_entries sb ON sb.id = e.superseded_by_id
+  LEFT JOIN agent_runs sar ON sar.id = e.source_agent_run_id
 `;
 
 function iso(value: Date | null): string | null {
@@ -46,6 +49,7 @@ function mapEntry(row: MemoryRow): MemoryEntry {
     relatedMilestoneId: row.related_milestone_id, relatedMilestoneTitle: row.related_milestone_title,
     supersededById: row.superseded_by_id, supersededByTitle: row.superseded_by_title,
     supersedesIds: row.supersedes_ids ?? [],
+    sourceAgentRunId: row.source_agent_run_id, sourceAgentRunTitle: row.source_agent_run_title,
     archivedAt: iso(row.archived_at), createdBy: row.created_by,
     createdAt: row.created_at.toISOString(), updatedAt: row.updated_at.toISOString(),
   };
@@ -112,21 +116,40 @@ export async function getMemoryEntry(db: Executor, projectId: string, entryId: s
   return mapEntry(await loadEntry(db, projectId, entryId));
 }
 
-async function insertEntry(
+/**
+ * Shared insert used by both ordinary memory creation and the promote-to-memory
+ * flow (agent-runs/store.ts). `sourceAgentRunId` is never accepted from the
+ * general create/supersede request bodies — see CreateMemoryEntryRequest,
+ * which has no such field — so only a caller with a project-verified agent
+ * run id in hand (the promote endpoint) can ever set it.
+ */
+export async function insertEntry(
   client: DbClient,
   projectId: string,
   actorId: string,
-  input: { type: MemoryType; title: string; body: string; importance: MemoryImportance; isPinned: boolean; relatedTaskId?: string | null; relatedMilestoneId?: string | null },
+  input: {
+    type: MemoryType; title: string; body: string; importance: MemoryImportance; isPinned: boolean;
+    relatedTaskId?: string | null; relatedMilestoneId?: string | null; sourceAgentRunId?: string | null;
+  },
 ): Promise<string> {
   if (input.relatedTaskId) await assertTaskInProject(client, projectId, input.relatedTaskId);
   if (input.relatedMilestoneId) await assertMilestoneInProject(client, projectId, input.relatedMilestoneId);
   const id = randomUUID();
   await client.query(
-    `INSERT INTO project_memory_entries (id, project_id, type, title, body, importance, is_pinned, related_task_id, related_milestone_id, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-    [id, projectId, input.type, input.title, input.body, input.importance, input.isPinned, input.relatedTaskId ?? null, input.relatedMilestoneId ?? null, actorId],
+    `INSERT INTO project_memory_entries (id, project_id, type, title, body, importance, is_pinned, related_task_id, related_milestone_id, source_agent_run_id, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    [id, projectId, input.type, input.title, input.body, input.importance, input.isPinned, input.relatedTaskId ?? null, input.relatedMilestoneId ?? null, input.sourceAgentRunId ?? null, actorId],
   );
   return id;
+}
+
+export async function listMemoryBySourceAgentRun(db: Executor, projectId: string, agentRunId: string): Promise<MemoryEntry[]> {
+  await getProjectGuard(db, projectId);
+  const { rows } = await db.query<MemoryRow>(
+    `${SELECT_ENTRY} WHERE e.project_id=$1 AND e.source_agent_run_id=$2 ORDER BY e.created_at DESC`,
+    [projectId, agentRunId],
+  );
+  return rows.map(mapEntry);
 }
 
 export async function createMemoryEntry(

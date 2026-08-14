@@ -208,7 +208,7 @@ restore_and_check() {
   log_ok "${database}: all expected tables present (${#expected_tables[@]})"
 }
 
-restore_and_check project_control users sessions audit_events schema_migrations system_settings artifact_objects projects roadmap_milestones roadmap_tasks task_acceptance_criteria task_dependencies task_notes project_memory_entries project_checkpoints
+restore_and_check project_control users sessions audit_events schema_migrations system_settings artifact_objects projects roadmap_milestones roadmap_tasks task_acceptance_criteria task_dependencies task_notes project_memory_entries project_checkpoints agent_runs agent_run_prompts agent_reports
 
 # n8n owns its own schema, so the table list is not asserted; the check is that
 # the dump loads and contains something.
@@ -267,6 +267,38 @@ if [[ "${checkpoint_rows:-0}" -gt 0 ]]; then
   fi
 else
   log_warn "no checkpoints in this snapshot to verify (fresh deployment)"
+fi
+
+agent_run_constraints="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM pg_constraint WHERE conname IN ('agent_runs_pkey','agent_run_prompts_pkey','agent_run_prompts_one_per_run','agent_reports_pkey','agent_reports_run_version_key','agent_reports_not_self_superseded')" 2>/dev/null || echo 0)"
+if [[ "${agent_run_constraints:-0}" == "6" ]]; then
+  log_ok "project_control: Agent Run relationships and uniqueness constraints restored"
+else
+  fail "restored project_control is missing Agent Run constraints (${agent_run_constraints}/6)"
+fi
+
+# Row-level sanity: prompt/report -> run and memory -> run relationships must
+# still resolve after the restore, and report version numbers must still be
+# unique per run (the whole point of the unique constraint just checked above
+# is that this can never happen — this independently confirms the *data*
+# agrees, not just that the constraint exists).
+orphan_prompts="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM agent_run_prompts p LEFT JOIN agent_runs r ON r.id = p.agent_run_id WHERE r.id IS NULL" 2>/dev/null || echo 0)"
+orphan_reports="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM agent_reports rp LEFT JOIN agent_runs r ON r.id = rp.agent_run_id WHERE r.id IS NULL" 2>/dev/null || echo 0)"
+orphan_provenance="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM project_memory_entries m LEFT JOIN agent_runs r ON r.id = m.source_agent_run_id WHERE m.source_agent_run_id IS NOT NULL AND r.id IS NULL" 2>/dev/null || echo 0)"
+duplicate_report_versions="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM (SELECT agent_run_id, version FROM agent_reports GROUP BY agent_run_id, version HAVING count(*) > 1) d" 2>/dev/null || echo 0)"
+if [[ "${orphan_prompts:-0}" == "0" && "${orphan_reports:-0}" == "0" && "${orphan_provenance:-0}" == "0" && "${duplicate_report_versions:-0}" == "0" ]]; then
+  log_ok "project_control: Agent Run prompt/report/memory-provenance relationships and report-version uniqueness hold after restore"
+else
+  fail "restored project_control has broken Agent Run relationships (orphan prompts=${orphan_prompts}, orphan reports=${orphan_reports}, orphan provenance=${orphan_provenance}, duplicate report versions=${duplicate_report_versions})"
 fi
 
 # =============================================================================

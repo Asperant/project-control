@@ -411,6 +411,63 @@ if [[ -n "$(container_id postgres)" ]] && is_root; then
   else
     record_check PASS PGS-007 "control_app cannot modify checkpoint snapshot content" "immutability enforced at the privilege level"
   fi
+
+  # Agent Run archive: no physical delete, ever, on any of the three tables.
+  if docker exec -i "$pg_cid" env PGPASSWORD="$control_pw" \
+       psql -U control_app -d project_control -tAc \
+       "DELETE FROM agent_runs WHERE false" >/dev/null 2>&1; then
+    record_check FAIL PGS-008 "control_app can DELETE from agent_runs" "Agent Runs must never be physically deleted"
+  else
+    record_check PASS PGS-008 "control_app cannot DELETE from agent_runs" ""
+  fi
+  if docker exec -i "$pg_cid" env PGPASSWORD="$control_pw" \
+       psql -U control_app -d project_control -tAc \
+       "DELETE FROM agent_run_prompts WHERE false" >/dev/null 2>&1; then
+    record_check FAIL PGS-009 "control_app can DELETE from agent_run_prompts" "sent prompts must never be physically deleted"
+  else
+    record_check PASS PGS-009 "control_app cannot DELETE from agent_run_prompts" ""
+  fi
+  if docker exec -i "$pg_cid" env PGPASSWORD="$control_pw" \
+       psql -U control_app -d project_control -tAc \
+       "DELETE FROM agent_reports WHERE false" >/dev/null 2>&1; then
+    record_check FAIL PGS-010 "control_app can DELETE from agent_reports" "finalized reports must never be physically deleted"
+  else
+    record_check PASS PGS-010 "control_app cannot DELETE from agent_reports" ""
+  fi
+
+  # backup_reader must be SELECT-only on the new tables too.
+  if docker exec -i "$pg_cid" env PGPASSWORD="$backup_pw" \
+       psql -U backup_reader -d project_control -tAc \
+       "INSERT INTO agent_runs (project_id, title, agent_name) SELECT id, 'probe', 'probe' FROM projects WHERE false" >/dev/null 2>&1; then
+    record_check FAIL PGS-011 "backup_reader can INSERT into agent_runs" "it must be read-only"
+  else
+    record_check PASS PGS-011 "backup_reader cannot write to agent_runs" "read-only enforced"
+  fi
+
+  # Sent prompts / final reports are immutable only *after* that state is
+  # reached — a state-dependent rule that a GRANT cannot express, so it is
+  # enforced by a BEFORE UPDATE trigger instead (see migrations/0009). The
+  # `WHERE false` live-write probe used above for PGS-003/PGS-007 does not
+  # prove anything here: a row-level trigger never fires against zero matched
+  # rows, so that style of check would pass even if the trigger were missing.
+  # Rather than inserting throwaway sent/final rows into a live database to
+  # get a real trigger firing, this inspects the catalog instead: the trigger
+  # exists, is enabled, and its function body contains the RAISE EXCEPTION
+  # guard. That is a structural proof, not a live behavioral one — the actual
+  # behavior is proven by the integration test suite
+  # (apps/control-api/test/integration/agent-runs.test.ts), which does
+  # perform real inserts/updates against a disposable test database.
+  trigger_guard="$(docker exec -i "$pg_cid" env PGPASSWORD="$control_pw" \
+       psql -U control_app -d project_control -tAc \
+       "SELECT count(*) FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid
+          WHERE t.tgname IN ('agent_run_prompts_guard_immutable','agent_reports_guard_immutable')
+            AND t.tgenabled <> 'D'
+            AND pg_get_functiondef(p.oid) ILIKE '%RAISE EXCEPTION%'" 2>/dev/null | tr -d '[:space:]')"
+  if [[ "${trigger_guard:-0}" == "2" ]]; then
+    record_check PASS PGS-012 "Sent-prompt/final-report immutability triggers exist, are enabled and guard with RAISE EXCEPTION" ""
+  else
+    record_check FAIL PGS-012 "Sent-prompt/final-report immutability triggers are missing, disabled, or lack a guard" "found ${trigger_guard:-0}/2"
+  fi
 else
   record_check SKIP PGS-001 "PostgreSQL role isolation" "requires root and a running postgres container"
 fi

@@ -34,13 +34,15 @@ const memoryEntry = {
   importance: 'normal', isPinned: false, status: 'active',
   relatedTaskId: null, relatedTaskTitle: null, relatedMilestoneId: null, relatedMilestoneTitle: null,
   supersededById: null, supersededByTitle: null, supersedesIds: [],
+  sourceAgentRunId: null, sourceAgentRunTitle: null,
   archivedAt: null, createdBy: null, createdAt: '2026-08-04T10:00:00.000Z', updatedAt: '2026-08-04T10:00:00.000Z',
 };
 
 const snapshotFragment = {
-  version: 1, projectId: PROJECT_ID, projectName: 'Demo', projectStatus: 'active', generatedAt: '2026-08-04T10:00:00.000Z',
+  version: 2, projectId: PROJECT_ID, projectName: 'Demo', projectStatus: 'active', generatedAt: '2026-08-04T10:00:00.000Z',
   currentFocus: [], inProgressTasks: [], blockedMilestones: [], blockedTasks: [], nextActions: [],
   pendingAcceptance: [], unresolvedDependencies: [], recentlyCompletedTasks: [], pinnedMemory: [], importantMemory: [],
+  recentAgentActivity: [],
 };
 
 const checkpointSummary = {
@@ -119,7 +121,7 @@ describe('checkpoints', () => {
   it('parses a full checkpoint detail response including the snapshot', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ checkpoint: { ...checkpointSummary, snapshot: snapshotFragment } }));
     const response = await api.getCheckpoint(PROJECT_ID, CHECKPOINT_ID);
-    expect(response.checkpoint.snapshot.version).toBe(1);
+    expect(response.checkpoint.snapshot.version).toBe(2);
   });
 
   it('archives a checkpoint and only returns the summary shape (no snapshot)', async () => {
@@ -134,7 +136,7 @@ describe('current context', () => {
     fetchMock.mockResolvedValue(jsonResponse({
       projectId: PROJECT_ID,
       currentFocus: [], inProgressTasks: [], blocked: { milestones: [], tasks: [] }, nextActions: [],
-      pendingAcceptance: [], unresolvedDependencies: [], pinnedContext: [],
+      pendingAcceptance: [], unresolvedDependencies: [], pinnedContext: [], recentAgentWork: [],
       lastCheckpoint: null,
       changesSinceCheckpoint: { hasCheckpoint: false, sinceCheckpointId: null, sinceCreatedAt: null, items: [] },
     }));
@@ -142,5 +144,29 @@ describe('current context', () => {
     expect((fetchMock.mock.calls[0] as [string])[0]).toBe(`/api/projects/${PROJECT_ID}/context`);
     expect(response.lastCheckpoint).toBeNull();
     expect(response.changesSinceCheckpoint.hasCheckpoint).toBe(false);
+  });
+
+  it('preserves recentAgentWork through response parsing, with no prompt/report body field', async () => {
+    const recentAgentWork = [{
+      agentRunId: '00000000-0000-4000-8000-000000000009', title: 'Investigate flaky checkpoint test', agentName: 'Claude',
+      status: 'completed', validationStatus: 'accepted_with_changes', relatedTaskId: null,
+      activityAt: '2026-08-04T10:00:00.000Z',
+    }];
+    fetchMock.mockResolvedValue(jsonResponse({
+      projectId: PROJECT_ID,
+      currentFocus: [], inProgressTasks: [], blocked: { milestones: [], tasks: [] }, nextActions: [],
+      pendingAcceptance: [], unresolvedDependencies: [], pinnedContext: [], recentAgentWork,
+      lastCheckpoint: null,
+      changesSinceCheckpoint: { hasCheckpoint: false, sinceCheckpointId: null, sinceCreatedAt: null, items: [] },
+    }));
+    const response = await api.getProjectContext(PROJECT_ID);
+    expect(response.recentAgentWork).toHaveLength(1);
+    expect(response.recentAgentWork[0]).toMatchObject({
+      agentName: 'Claude', title: 'Investigate flaky checkpoint test',
+      status: 'completed', validationStatus: 'accepted_with_changes',
+    });
+    expect(response.recentAgentWork[0]).not.toHaveProperty('body');
+    expect(response.recentAgentWork[0]).not.toHaveProperty('prompt');
+    expect(response.recentAgentWork[0]).not.toHaveProperty('report');
   });
 });

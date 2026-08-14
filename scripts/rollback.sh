@@ -143,7 +143,15 @@ fi
 # -----------------------------------------------------------------------------
 log_step "Verifying"
 # -----------------------------------------------------------------------------
-sleep 5
+# Recreating containers races the same way an update does: "Healthy" does not
+# mean Caddy's upstream connection to control-api has come up yet. Wait for
+# the route to genuinely answer before handing off to verify.sh, instead of
+# guessing with a fixed sleep — but still run verify.sh even if the deadline
+# is exceeded, since it checks far more than just this one route and its
+# result stays meaningful (and strict) either way.
+if ! wait_for_api_route "http://127.0.0.1:8780/api/auth/me" 401; then
+  log_warn "API route did not confirm readiness before the deadline; running verification anyway"
+fi
 if bash "${PC_SCRIPTS_DIR}/verify.sh"; then
   log_ok "verification passed after rollback"
 else

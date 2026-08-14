@@ -68,10 +68,66 @@ describe.skipIf(!hasDocker)('immutable checkpoints', () => {
     expect(clean.statusCode).toBe(201);
     const { checkpoint } = clean.json();
     expect(checkpoint.sessionNote).toBe('Roadmap side finished.');
-    expect(checkpoint.snapshotVersion).toBe(1);
-    expect(checkpoint.snapshot.version).toBe(1);
+    // New checkpoints are always written as v2 (adds recentAgentActivity).
+    expect(checkpoint.snapshotVersion).toBe(2);
+    expect(checkpoint.snapshot.version).toBe(2);
     expect(checkpoint.snapshot.projectId).toBe(id);
     expect(checkpoint.snapshot).not.toHaveProperty('forged');
+    expect(checkpoint.snapshot.recentAgentActivity).toEqual([]);
+  });
+
+  it('still reads a v1-shaped checkpoint row (no recentAgentActivity key) written before this feature existed', async () => {
+    const id = await project();
+    const v1Snapshot = {
+      version: 1, projectId: id, projectName: 'V1 project', projectStatus: 'active', generatedAt: new Date().toISOString(),
+      currentFocus: [], inProgressTasks: [], blockedMilestones: [], blockedTasks: [], nextActions: [],
+      pendingAcceptance: [], unresolvedDependencies: [], recentlyCompletedTasks: [], pinnedMemory: [], importantMemory: [],
+    };
+    const checkpointId = randomUUID();
+    await harness.ctx.db.query(
+      `INSERT INTO project_checkpoints (id, project_id, snapshot_version, snapshot_json, session_note) VALUES ($1,$2,1,$3::jsonb,'legacy')`,
+      [checkpointId, id, JSON.stringify(v1Snapshot)],
+    );
+
+    const list = (await request('GET', `/api/projects/${id}/checkpoints`)).json().checkpoints;
+    expect(list.map((c: any) => c.id)).toContain(checkpointId);
+
+    const detail = (await request('GET', `/api/projects/${id}/checkpoints/${checkpointId}`)).json().checkpoint;
+    expect(detail.snapshotVersion).toBe(1);
+    expect(detail.snapshot.version).toBe(1);
+    expect(detail.snapshot).not.toHaveProperty('recentAgentActivity');
+  });
+
+  it('includes recent, non-draft, non-archived Agent Run activity in the snapshot, newest first, capped at 5, with no prompt/report body', async () => {
+    const id = await project();
+
+    async function sentRun(title: string): Promise<string> {
+      const run = (await request('POST', `/api/projects/${id}/agent-runs`, { title, agentName: 'Claude' })).json().agentRun;
+      await request('PATCH', `/api/projects/${id}/agent-runs/${run.id}/prompt`, { body: 'Do the thing.' });
+      await request('POST', `/api/projects/${id}/agent-runs/${run.id}/prompt/send`);
+      return run.id;
+    }
+
+    const draftRun = (await request('POST', `/api/projects/${id}/agent-runs`, { title: 'Never sent', agentName: 'Claude' })).json().agentRun;
+    void draftRun;
+    const ids: string[] = [];
+    for (let i = 0; i < 6; i += 1) ids.push(await sentRun(`Run ${i}`));
+    // Archive the very last one — it must not appear even though it's recent.
+    await request('POST', `/api/projects/${id}/agent-runs/${ids[5]}/archive`);
+
+    const checkpoint = (await request('POST', `/api/projects/${id}/checkpoints`, {})).json().checkpoint;
+    const activity = checkpoint.snapshot.recentAgentActivity;
+    expect(activity).toHaveLength(5);
+    expect(activity.map((a: any) => a.agentRunId)).not.toContain(draftRun.id);
+    expect(activity.map((a: any) => a.agentRunId)).not.toContain(ids[5]);
+    expect(activity.every((a: any) => !('body' in a))).toBe(true);
+    for (const a of activity) {
+      expect(a).toHaveProperty('agentRunId');
+      expect(a).toHaveProperty('title');
+      expect(a).toHaveProperty('agentName', 'Claude');
+      expect(a).toHaveProperty('status', 'sent');
+      expect(a).toHaveProperty('validationStatus', 'not_reviewed');
+    }
   });
 
   it('rejects checkpoint creation on an archived project', async () => {

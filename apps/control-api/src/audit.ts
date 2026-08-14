@@ -51,7 +51,15 @@ export type AuditEventType =
   | 'roadmap.note.created' | 'roadmap.note.updated' | 'roadmap.note.deleted'
   | 'memory.created' | 'memory.updated' | 'memory.pinned' | 'memory.unpinned'
   | 'memory.archived' | 'memory.reactivated' | 'memory.superseded'
-  | 'checkpoint.created' | 'checkpoint.archived';
+  | 'checkpoint.created' | 'checkpoint.archived'
+  | 'agentrun.created' | 'agentrun.updated' | 'agentrun.sent' | 'agentrun.started'
+  | 'agentrun.completed' | 'agentrun.failed' | 'agentrun.cancelled'
+  | 'agentrun.archived' | 'agentrun.reactivated' | 'agentrun.duplicated'
+  | 'agentrun.memory_promoted'
+  | 'agentprompt.updated'
+  | 'agentreport.created' | 'agentreport.updated' | 'agentreport.finalized'
+  | 'agentreport.revision_started' | 'agentreport.superseded'
+  | 'agentvalidation.updated';
 
 export type AuditEntry = {
   eventType: AuditEventType;

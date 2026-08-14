@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { roadmapPrioritySchema, roadmapStatusSchema } from './roadmap.js';
+import { recentAgentActivitySchema } from './agent-runs.js';
 
 const uuid = z.string().uuid();
 const timestamp = z.string().datetime({ offset: true });
@@ -40,6 +41,10 @@ export const memoryEntrySchema = z.object({
   createdBy: uuid.nullable(),
   createdAt: timestamp,
   updatedAt: timestamp,
+  // Set only by the promote-to-memory flow (see docs/agent-runs.md); the
+  // general create/update endpoints for memory entries never accept this.
+  sourceAgentRunId: uuid.nullable(),
+  sourceAgentRunTitle: z.string().nullable(),
 });
 export type MemoryEntry = z.infer<typeof memoryEntrySchema>;
 
@@ -110,8 +115,14 @@ const snapshotDependencySchema = z.object({ taskId: uuid, title: z.string(), mil
 const snapshotCompletedTaskSchema = z.object({ taskId: uuid, title: z.string(), milestoneId: uuid, milestoneTitle: z.string(), completedAt: timestamp });
 const snapshotMemorySchema = z.object({ id: uuid, type: memoryTypeSchema, title: z.string(), importance: memoryImportanceSchema });
 
-export const checkpointSnapshotSchema = z.object({
-  version: z.literal(1),
+/**
+ * Snapshot format versioning. v1 shipped without any Agent Run awareness; v2
+ * adds a small, body-free `recentAgentActivity` list. Old rows keep whatever
+ * `snapshot_version` they were written with — they are never rewritten — so
+ * both shapes must stay parseable indefinitely. New checkpoints are always
+ * written as v2 (see src/checkpoints/snapshot.ts).
+ */
+const checkpointSnapshotBaseSchema = z.object({
   projectId: uuid,
   projectName: z.string(),
   projectStatus: z.string(),
@@ -127,6 +138,15 @@ export const checkpointSnapshotSchema = z.object({
   pinnedMemory: z.array(snapshotMemorySchema),
   importantMemory: z.array(snapshotMemorySchema),
 });
+
+export const checkpointSnapshotV1Schema = checkpointSnapshotBaseSchema.extend({ version: z.literal(1) });
+export const checkpointSnapshotV2Schema = checkpointSnapshotBaseSchema.extend({
+  version: z.literal(2),
+  recentAgentActivity: z.array(recentAgentActivitySchema),
+});
+export const checkpointSnapshotSchema = z.discriminatedUnion('version', [checkpointSnapshotV1Schema, checkpointSnapshotV2Schema]);
+export type CheckpointSnapshotV1 = z.infer<typeof checkpointSnapshotV1Schema>;
+export type CheckpointSnapshotV2 = z.infer<typeof checkpointSnapshotV2Schema>;
 export type CheckpointSnapshot = z.infer<typeof checkpointSnapshotSchema>;
 
 export const checkpointSummarySchema = z.object({
@@ -166,6 +186,7 @@ export const projectContextResponseSchema = z.object({
   pendingAcceptance: z.array(snapshotAcceptanceSchema),
   unresolvedDependencies: z.array(snapshotDependencySchema),
   pinnedContext: z.array(memoryEntrySchema),
+  recentAgentWork: z.array(recentAgentActivitySchema),
   lastCheckpoint: checkpointSummarySchema.nullable(),
   changesSinceCheckpoint: z.object({
     hasCheckpoint: z.boolean(),

@@ -246,8 +246,12 @@ for attempt in $(seq 1 12); do
 done
 
 if (( gate_passed )); then
-  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:8780/api/auth/me" 2>/dev/null || echo 000)"
-  [[ "$code" == "401" ]] || { log_error "API gate returned HTTP ${code}, expected 401"; gate_passed=0; }
+  # Containers reporting Healthy does not yet guarantee Caddy's upstream
+  # connection to control-api is ready — a transient 503 here is a startup
+  # race, not a failure. wait_for_api_route (lib/common.sh) retries that
+  # specific signature within a bounded deadline; anything else (an
+  # unexpected 200, a persistent non-503 error) still fails immediately.
+  wait_for_api_route "http://127.0.0.1:8780/api/auth/me" 401 || gate_passed=0
 fi
 
 if (( ! gate_passed )); then

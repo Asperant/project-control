@@ -239,7 +239,7 @@ button.primary {
   font-weight: 600;
 }
 
-.detail-tabs { display:flex; gap:.5rem; margin:1rem 0; border-bottom:1px solid var(--border); }
+.detail-tabs { display:flex; flex-wrap:wrap; gap:.5rem; margin:1rem 0; border-bottom:1px solid var(--border); }
 .detail-tabs button[aria-current="page"] { border-color:var(--accent); color:var(--accent); font-weight:650; }
 .roadmap-view { display:grid; gap:1rem; }
 .roadmap-view section + section { margin-top:0; }
@@ -304,7 +304,21 @@ button.primary {
   .checkpoint-history li{flex-direction:column;align-items:stretch}
   .checkpoint-dialog-backdrop{padding:.5rem}
   .checkpoint-dialog{max-height:calc(100vh - 1rem)}
+  .agent-runs-view button,.agent-runs-view select,.agent-runs-view input[type="checkbox"],.agent-runs-view input[type="search"],.agent-runs-view textarea,
+  .agent-run-detail button,.agent-run-detail select,.agent-run-detail input[type="checkbox"],.agent-run-detail textarea{min-height:44px}
+  .agent-runs-view .card,.agent-run-detail .card{padding:.8rem}
 }
+
+/* --- Agent Runs -------------------------------------------------------------- */
+.agent-runs-view { display:grid; gap:1rem; }
+.agent-run-detail { display:grid; gap:1rem; }
+.agent-run-card-open { display:flex; flex-direction:column; align-items:flex-start; gap:.3rem; border:1px solid var(--border); border-radius:8px; padding:.6rem .75rem; background:var(--surface-alt); width:100%; text-align:left; }
+.agent-run-card-open:hover { border-color:var(--accent); }
+.agent-run-prompt-body { white-space:pre-wrap; overflow-wrap:anywhere; font-family:var(--mono); font-size:.85rem; background:var(--surface-alt); border-radius:8px; padding:.6rem .75rem; margin:.5rem 0; }
+.agent-report-draft,.agent-report-card,.agent-report-history { border-top:1px solid var(--border); padding-top:.75rem; margin-top:.5rem; }
+.agent-report-rendered { overflow-wrap:anywhere; }
+.agent-report-rendered :is(h1,h2,h3) { font-size:1rem; }
+.agent-report-rendered pre { overflow-x:auto; background:var(--surface-alt); padding:.5rem; border-radius:6px; }
 
 /* --- Forms ----------------------------------------------------------------- */
 .login-wrap {
