@@ -1,10 +1,15 @@
-// Package operations implements the Stage 1 operation handlers.
+// Package operations implements the runner's operation handlers.
 //
-// Scope is deliberately tiny: two read-only diagnostics. Neither spawns a
-// process, opens a network connection, reads a secret, or writes outside the
-// runner's own working directory. Real project commands arrive in later stages,
-// and will arrive as new entries in this table — never as caller-supplied
-// commands.
+// Scope stays narrow by construction: every handler is read-only apart from
+// one temp file in the runner's own working directory (runner.selftest).
+// Nothing here spawns a process on caller-supplied input, opens a network
+// connection, or writes outside the runner's own working directory. The
+// project-registration operations (project.path.validate, project.inspect,
+// project.git.summary) read filesystem state under an operator-configured
+// allowed root and, for git.summary/inspect, invoke `git` — but always with a
+// fixed argv and a caller-independent directory already validated by
+// internal/projectpath; see internal/gitinfo's package doc for the full
+// justification of that one exception to "the runner executes nothing".
 package operations
 
 import (
@@ -31,9 +36,16 @@ type Config struct {
 	Version string
 	// StartedAt is the process start time, for uptime reporting.
 	StartedAt time.Time
+	// AllowedProjectRoots is the fixed, root-owned list of directories a
+	// project path may be registered under. Loaded once at startup from a
+	// file the web panel and Control API cannot write to; empty when that
+	// file could not be read, in which case every project-registration
+	// operation reports "no_allowed_roots_configured" rather than the runner
+	// refusing to start.
+	AllowedProjectRoots []string
 }
 
-// All returns the complete Stage 1 operation set.
+// All returns the complete operation set.
 func All(cfg Config) []registry.Operation {
 	return []registry.Operation{
 		{
@@ -49,6 +61,27 @@ func All(cfg Config) []registry.Operation {
 			TimeoutSeconds: 15,
 			Params:         nil,
 			Handler:        runnerSelfTest(cfg),
+		},
+		{
+			Name:           "project.path.validate",
+			Description:    "Validates a caller-supplied path against the configured allowed project roots. Read-only; touches only path metadata.",
+			TimeoutSeconds: 10,
+			Params:         []registry.ParamSpec{{Name: "path", Type: "string", Required: true, MaxLength: 4096}},
+			Handler:        projectPathValidate(cfg),
+		},
+		{
+			Name:           "project.inspect",
+			Description:    "Validates a path, then reads git state and manifest-detected technology under it. Read-only.",
+			TimeoutSeconds: 25,
+			Params:         []registry.ParamSpec{{Name: "path", Type: "string", Required: true, MaxLength: 4096}},
+			Handler:        projectInspect(cfg),
+		},
+		{
+			Name:           "project.git.summary",
+			Description:    "Validates a path, then reads git state only. Read-only.",
+			TimeoutSeconds: 15,
+			Params:         []registry.ParamSpec{{Name: "path", Type: "string", Required: true, MaxLength: 4096}},
+			Handler:        projectGitSummary(cfg),
 		},
 	}
 }

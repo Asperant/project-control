@@ -14,7 +14,13 @@ import { z } from 'zod';
  * object, connection closed. No framing ambiguity, no keep-alive state.
  */
 
-export const runnerOperationSchema = z.enum(['system.health', 'runner.selftest']);
+export const runnerOperationSchema = z.enum([
+  'system.health',
+  'runner.selftest',
+  'project.path.validate',
+  'project.inspect',
+  'project.git.summary',
+]);
 export type RunnerOperation = z.infer<typeof runnerOperationSchema>;
 
 export const runnerResponseSchema = z.object({

@@ -8,6 +8,7 @@ import { runMigrations } from './db/migrate.js';
 import { createLogger } from './logger.js';
 import { RunnerClient } from './runner/client.js';
 import { FilesystemArtifactStore } from './storage/filesystem-store.js';
+import { purgeExpiredInspections } from './projects/store.js';
 import type { AppContext } from './context.js';
 
 /**
@@ -96,8 +97,9 @@ async function main(): Promise<void> {
         try {
           const sessions = await ctx.sessions.purgeExpired();
           const staging = await artifactStore.sweepTemporary();
-          if (sessions > 0 || staging > 0) {
-            logger.info({ sessions, staging }, 'housekeeping sweep');
+          const inspections = await purgeExpiredInspections(db);
+          if (sessions > 0 || staging > 0 || inspections > 0) {
+            logger.info({ sessions, staging, inspections }, 'housekeeping sweep');
           }
         } catch (error) {
           logger.warn({ err: error }, 'housekeeping sweep failed');

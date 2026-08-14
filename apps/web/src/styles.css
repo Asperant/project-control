@@ -262,7 +262,9 @@ button.primary {
 .field { margin-bottom: 1rem; }
 .field label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem; }
 
-.field input {
+.field input,
+.field textarea,
+.field select {
   width: 100%;
   font: inherit;
   padding: 0.6rem 0.7rem;
@@ -271,6 +273,160 @@ button.primary {
   background: var(--bg);
   color: var(--text);
 }
+
+.field textarea { resize: vertical; }
+
+/* --- Tabs -------------------------------------------------------------- */
+.tab-nav { display: flex; gap: 0.35rem; }
+.tab-nav button {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  font-weight: 600;
+  padding: 0.4rem 0.75rem;
+}
+.tab-nav button.tab-active {
+  background: var(--surface-alt);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+/* --- Projects toolbar / filters ----------------------------------------- */
+.projects-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-bottom: 1.25rem;
+}
+.filter-bar input,
+.filter-bar select {
+  font: inherit;
+  padding: 0.45rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+.filter-bar input[type='search'] { flex: 1 1 14rem; min-width: 10rem; }
+
+.checkbox-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+/* --- Data table ---------------------------------------------------------- */
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  -webkit-overflow-scrolling: touch;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  min-width: 50rem; /* forces horizontal scroll on narrow viewports rather than a cramped, unreadable table */
+}
+
+.data-table th,
+.data-table td {
+  text-align: left;
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.data-table thead th {
+  color: var(--text-muted);
+  font-weight: 650;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  background: var(--surface-alt);
+}
+
+.data-table-row { cursor: pointer; background: var(--surface); }
+.data-table-row:hover { background: var(--surface-alt); }
+.data-table-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+/* --- Forms rows (inline add-item forms) ---------------------------------- */
+.form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.5rem;
+}
+.form-row input,
+.form-row select {
+  font: inherit;
+  padding: 0.45rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+.form-row input[type='text'] { flex: 1 1 10rem; }
+
+/* --- Chips (technologies, commands, rules preview) ------------------------ */
+.chip-list {
+  list-style: none;
+  margin: 0.25rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.8rem;
+}
+.chip-remove {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 0.15rem;
+}
+.chip-remove:hover { color: var(--down); }
+
+.spacer-inline { margin-left: auto; display: inline-flex; gap: 0.4rem; }
+
+/* --- Rescan diff entries -------------------------------------------------- */
+.diff-entry {
+  border-radius: 6px;
+  padding: 0.15rem 0.5rem;
+}
+.diff-entry.alert-error { background: var(--down-bg); }
+.diff-entry.alert-warn { background: var(--warn-bg); }
+.diff-entry.alert-ok { background: transparent; }
 
 .field input:disabled { opacity: 0.6; }
 
@@ -332,4 +488,8 @@ code {
   .app-header { padding: 0.75rem 1rem; }
   main { padding: 1rem 1rem 3rem; }
   .card-grid { grid-template-columns: 1fr; }
+  .filter-bar { flex-direction: column; align-items: stretch; }
+  .filter-bar input[type='search'] { flex: unset; }
+  .projects-toolbar { flex-direction: column; align-items: stretch; }
+  .spacer-inline { margin-left: 0; }
 }

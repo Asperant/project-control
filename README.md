@@ -150,6 +150,7 @@ upstream registry. No `latest`, no floating tag, no `^` or `~` in any manifest.
 | --- | --- |
 | [architecture.md](docs/architecture.md) | Components, networks, data flow, design rationale |
 | [security-model.md](docs/security-model.md) | Threat model and every control, with its verification |
+| [project-registration.md](docs/project-registration.md) | Registering, inspecting, rescanning and archiving projects |
 | [installation.md](docs/installation.md) | Clean-machine install on Ubuntu 22.04 |
 | [manual-checkpoints.md](docs/manual-checkpoints.md) | The five steps that need a human |
 | [operations.md](docs/operations.md) | Daily operation, logs, secret rotation |

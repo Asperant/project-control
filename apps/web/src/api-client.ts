@@ -1,13 +1,39 @@
 import {
+  applyRescanResponseSchema,
   artifactSelfTestResponseSchema,
   authSessionResponseSchema,
+  deletedResponseSchema,
   errorResponseSchema,
+  listProjectsResponseSchema,
   logoutResponseSchema,
+  projectActivityResponseSchema,
+  projectCommandResponseSchema,
+  projectInspectionResponseSchema,
+  projectResponseSchema,
+  projectRuleResponseSchema,
+  projectTechnologyResponseSchema,
+  rescanProjectResponseSchema,
   systemStatusResponseSchema,
+  type ApplyRescanRequest,
+  type ApplyRescanResponse,
   type ArtifactSelfTestResponse,
   type AuthSessionResponse,
+  type CreateProjectCommandRequest,
+  type CreateProjectRequest,
+  type CreateProjectRuleRequest,
+  type CreateProjectTechnologyRequest,
   type ErrorCode,
+  type InspectProjectRequest,
+  type ListProjectsQuery,
+  type ListProjectsResponse,
+  type ProjectActivityResponse,
+  type ProjectInspectionResponse,
+  type ProjectResponse,
+  type RescanProjectResponse,
   type SystemStatusResponse,
+  type UpdateProjectCommandRequest,
+  type UpdateProjectRequest,
+  type UpdateProjectRuleRequest,
 } from '@project-control/contracts';
 
 /**
@@ -64,7 +90,7 @@ export function getCsrfToken(): string | null {
 }
 
 type RequestOptions = {
-  method?: 'GET' | 'POST';
+  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   body?: unknown;
   signal?: AbortSignal;
 };
@@ -184,5 +210,89 @@ export const api = {
 
   artifactSelfTest(): Promise<ArtifactSelfTestResponse> {
     return request('/api/artifacts/self-test', artifactSelfTestResponseSchema, { method: 'POST' });
+  },
+
+  // --- Projects --------------------------------------------------------------
+
+  inspectProject(body: InspectProjectRequest): Promise<ProjectInspectionResponse> {
+    return request('/api/projects/inspections', projectInspectionResponseSchema, { method: 'POST', body });
+  },
+
+  getInspection(inspectionId: string): Promise<ProjectInspectionResponse> {
+    return request(`/api/projects/inspections/${inspectionId}`, projectInspectionResponseSchema);
+  },
+
+  createProject(body: CreateProjectRequest): Promise<ProjectResponse> {
+    return request('/api/projects', projectResponseSchema, { method: 'POST', body });
+  },
+
+  listProjects(query: Partial<ListProjectsQuery> = {}, signal?: AbortSignal): Promise<ListProjectsResponse> {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value === undefined || value === '') continue;
+      params.set(key, String(value));
+    }
+    const qs = params.toString();
+    return request(`/api/projects${qs ? `?${qs}` : ''}`, listProjectsResponseSchema, signal ? { signal } : {});
+  },
+
+  getProject(id: string, signal?: AbortSignal): Promise<ProjectResponse> {
+    return request(`/api/projects/${id}`, projectResponseSchema, signal ? { signal } : {});
+  },
+
+  updateProject(id: string, body: UpdateProjectRequest): Promise<ProjectResponse> {
+    return request(`/api/projects/${id}`, projectResponseSchema, { method: 'PATCH', body });
+  },
+
+  archiveProject(id: string): Promise<ProjectResponse> {
+    return request(`/api/projects/${id}/archive`, projectResponseSchema, { method: 'POST' });
+  },
+
+  reactivateProject(id: string): Promise<ProjectResponse> {
+    return request(`/api/projects/${id}/reactivate`, projectResponseSchema, { method: 'POST' });
+  },
+
+  getProjectActivity(id: string): Promise<ProjectActivityResponse> {
+    return request(`/api/projects/${id}/activity`, projectActivityResponseSchema);
+  },
+
+  addProjectRule(id: string, body: CreateProjectRuleRequest) {
+    return request(`/api/projects/${id}/rules`, projectRuleResponseSchema, { method: 'POST', body });
+  },
+
+  updateProjectRule(id: string, ruleId: string, body: UpdateProjectRuleRequest) {
+    return request(`/api/projects/${id}/rules/${ruleId}`, projectRuleResponseSchema, { method: 'PATCH', body });
+  },
+
+  deleteProjectRule(id: string, ruleId: string) {
+    return request(`/api/projects/${id}/rules/${ruleId}`, deletedResponseSchema, { method: 'DELETE' });
+  },
+
+  addProjectTechnology(id: string, body: CreateProjectTechnologyRequest) {
+    return request(`/api/projects/${id}/technologies`, projectTechnologyResponseSchema, { method: 'POST', body });
+  },
+
+  deleteProjectTechnology(id: string, technologyId: string) {
+    return request(`/api/projects/${id}/technologies/${technologyId}`, deletedResponseSchema, { method: 'DELETE' });
+  },
+
+  addProjectCommand(id: string, body: CreateProjectCommandRequest) {
+    return request(`/api/projects/${id}/commands`, projectCommandResponseSchema, { method: 'POST', body });
+  },
+
+  updateProjectCommand(id: string, commandId: string, body: UpdateProjectCommandRequest) {
+    return request(`/api/projects/${id}/commands/${commandId}`, projectCommandResponseSchema, { method: 'PATCH', body });
+  },
+
+  deleteProjectCommand(id: string, commandId: string) {
+    return request(`/api/projects/${id}/commands/${commandId}`, deletedResponseSchema, { method: 'DELETE' });
+  },
+
+  rescanProject(id: string): Promise<RescanProjectResponse> {
+    return request(`/api/projects/${id}/rescan`, rescanProjectResponseSchema, { method: 'POST' });
+  },
+
+  applyRescan(id: string, body: ApplyRescanRequest): Promise<ApplyRescanResponse> {
+    return request(`/api/projects/${id}/rescan/apply`, applyRescanResponseSchema, { method: 'POST', body });
   },
 };

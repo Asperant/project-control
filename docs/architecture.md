@@ -60,6 +60,34 @@ Stage 1 surface:
 `/health/*` is deliberately **not** routed through Caddy, so it is reachable
 only from inside the container network — Docker's healthcheck runs there.
 
+### Project registration surface
+
+Added alongside the Stage 1 routes above; see
+[`project-registration.md`](project-registration.md) for the full user-facing
+flow and [`security-model.md`](security-model.md#11-project-registration) for
+the security design.
+
+| Route | Auth | Purpose |
+| --- | --- | --- |
+| `POST /api/projects/inspections` | session + CSRF, admin/operator | read-only folder inspection → a single-use, expiring preview |
+| `GET /api/projects/inspections/:id` | session | view a previously created inspection preview |
+| `POST /api/projects` | session + CSRF, admin/operator | create a project from a confirmed inspection |
+| `GET /api/projects` | session | paginated, filtered, sorted list |
+| `GET /api/projects/:id` | session | project detail |
+| `PATCH /api/projects/:id` | session + CSRF, admin/operator | update general information |
+| `POST /api/projects/:id/archive` | session + CSRF, admin/operator | archive (never a physical delete) |
+| `POST /api/projects/:id/reactivate` | session + CSRF, admin/operator | reactivate an archived project |
+| `GET /api/projects/:id/activity` | session | project-scoped audit history |
+| `POST/PATCH/DELETE /api/projects/:id/rules/...` | session + CSRF, admin/operator | project rules |
+| `POST/DELETE /api/projects/:id/technologies/...` | session + CSRF, admin/operator | operator-added technologies (detected ones cannot be deleted, only removed by a rescan no longer finding them) |
+| `POST/PATCH/DELETE /api/projects/:id/commands/...` | session + CSRF, admin/operator | command **metadata** — never executed by any part of this platform |
+| `POST /api/projects/:id/rescan` | session + CSRF, admin/operator | re-inspect and compute a diff against the stored profile |
+| `POST /api/projects/:id/rescan/apply` | session + CSRF, admin/operator | apply an operator-confirmed diff |
+
+Every write route requires the `admin` or `operator` role (`viewer` is
+read-only); this reuses the existing `role` column and `requireRole` guard
+rather than introducing a second authorization system.
+
 ### Web panel (`apps/web`)
 
 React 19 + Vite, served as static files by a minimal Caddy instance. It talks
@@ -88,6 +116,41 @@ Design constraints, all enforced rather than documented-only:
   the one host-resident component is this repository.
 
 Stage 1 operations: `system.health`, `runner.selftest`. Both read-only.
+
+Project-registration operations: `project.path.validate`, `project.inspect`,
+`project.git.summary`. All read-only, and all gated by the same
+`internal/projectpath` check — a caller-supplied path is only ever resolved
+against a fixed, root-owned list of allowed roots (see
+`config/allowed-project-roots.conf` and the systemd drop-in below), never
+against caller-supplied roots.
+
+**The one exception to "no execution path" is `git`**, invoked by
+`project.inspect`/`project.git.summary` with a fixed, hardcoded argv per
+subcommand and only against a directory `internal/projectpath` has already
+validated. `internal/gitinfo`'s package doc explains why this is the safer
+choice over a from-scratch reimplementation of `git status` (which would mean
+parsing the binary index format and replicating gitignore semantics — real
+parsing of a complex on-disk format, with a wrong reimplementation silently
+misreporting a project's state). `GIT_OPTIONAL_LOCKS=0` plus
+`--no-optional-locks` guarantee the invocation never writes to `.git/index`;
+only read-only, non-hook-invoking subcommands are used
+(`rev-parse`, `symbolic-ref`, `show-ref`, `config --get-regexp`, `log`,
+`status`) — never fetch, pull, checkout, commit or merge.
+
+**Allowed roots and the systemd drop-in.** The runner reads
+`config/allowed-project-roots.conf` — a root-owned, non-secret, newline-
+separated list of directories — at start-up. `scripts/install.sh` generates a
+matching systemd drop-in,
+`project-control-runner.service.d/10-allowed-roots.conf`, adding one
+`BindReadOnlyPaths=` exception per configured root to the base unit's
+`ProtectHome=tmpfs`. This is systemd's own documented mechanism for punching a
+narrow, read-only hole in `ProtectHome`/`ProtectSystem=strict` — the runner
+never gains broader `/home` access, and the exception is always read-only.
+(`ProtectHome=tmpfs` rather than `=yes`: systemd cannot create a
+`BindReadOnlyPaths=` mount point nested under a path `ProtectHome=yes` has
+made inaccessible, so the exception would silently never apply.)
+Both the config file and the drop-in are written only by root-run tooling; the
+web panel and Control API cannot reach either.
 
 ### PostgreSQL
 
@@ -185,6 +248,17 @@ so a later stage can add one without touching callers.
 
 Stage 1 tables: `users`, `sessions`, `audit_events`, `schema_migrations`,
 `system_settings`, `artifact_objects`.
+
+Project-registration tables (migrations `0003`/`0004`): `projects` (location
+and repository facts live as columns on this table, not a separate 1:1 table —
+both are intrinsic, always-one-or-none-per-project attributes, so a join would
+buy nothing), `project_technologies`, `project_rules`, `project_commands`, and
+`project_inspections` — the short-lived, server-held result of a folder scan,
+which also doubles as the rescan-diff staging area via its nullable
+`project_id`. A partial unique index enforces one active project per canonical
+filesystem path and, separately, per normalised repository identity; both are
+scoped to non-archived projects, so an archived project never blocks a fresh
+registration of the same folder or repository.
 
 Migrations are checksum-verified: editing an applied migration aborts start-up
 rather than letting the recorded history diverge from the live schema. A

@@ -11,6 +11,7 @@ import { healthRoutes } from './routes/health.js';
 import { authRoutes } from './routes/auth.js';
 import { systemRoutes } from './routes/system.js';
 import { artifactRoutes } from './routes/artifacts.js';
+import { projectRoutes } from './routes/projects.js';
 
 /**
  * Builds the Fastify instance.
@@ -198,6 +199,7 @@ export async function buildApp(ctx: AppContext) {
   await app.register(authRoutes(ctx));
   await app.register(systemRoutes(ctx));
   await app.register(artifactRoutes(ctx));
+  await app.register(projectRoutes(ctx));
 
   return app;
 }

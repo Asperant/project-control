@@ -110,7 +110,7 @@ layers.
 ```
 User=project-runner              NoNewPrivileges=yes
 CapabilityBoundingSet=           (empty)
-ProtectSystem=strict             ProtectHome=yes
+ProtectSystem=strict             ProtectHome=tmpfs
 PrivateTmp=yes                   PrivateDevices=yes
 RestrictAddressFamilies=AF_UNIX  IPAddressDeny=any
 MemoryDenyWriteExecute=yes       RestrictSUIDSGID=yes
@@ -129,9 +129,17 @@ container joins that group via `group_add`. Group membership is the entire
 credential — there is no token, no password, no allowlist to get wrong.
 
 `verify-security` sends three hostile payloads (`/bin/sh`, a `command` field,
-`exec`) over the live socket and requires all three to be refused.
+`exec`) over the live socket and requires all three to be refused, and (for
+the project-registration operations specifically) four hostile *paths*
+(`/etc/passwd`, a `../` traversal, an SSH key path, a relative path) and
+requires `project.inspect` to report every one of them `valid: false` rather
+than accepting any of them.
 
-*Verified by:* `RNR-001` … `RNR-007`.
+*Verified by:* `RNR-001` … `RNR-008`. Allowed-root confinement specifically:
+`RNR-009` (drop-in uses `BindReadOnlyPaths=` only, never the whole of `/home`)
+and `RNR-010` (a **kernel-level** check — reads the running runner's own
+`/proc/<pid>/mountinfo` and confirms the bind mount for the configured root is
+actually `ro` in its mount namespace, not just declared so in a unit file).
 
 ---
 
@@ -284,6 +292,141 @@ some error payloads.
   every exit path including failure.
 - The restore test runs in a throwaway container on its own internal network,
   with the restore target asserted to be inside `backups/restore-tests/`.
+
+---
+
+## 11. Project registration
+
+**Claim: the operator can only register folders under a fixed, root-managed
+allowlist, the runner can only ever read them, and nothing about a folder's
+content that looks like a secret is ever read, stored, or returned.**
+
+### Allowed roots
+
+`config/allowed-project-roots.conf` is root-owned (`0644`), non-secret, and
+written only by `scripts/install.sh` or a root operator editing it directly —
+never by the web panel or the Control API, which have no write access to it at
+all. The default on a fresh install is `/home/asrin/Desktop`; adding a second
+root is a one-line edit followed by `sudo ./pcctl install` (idempotent),
+which regenerates the systemd exception below and restarts the runner.
+
+At the OS level, `ProtectHome=tmpfs` on the runner's systemd unit hides all of
+`/home` by default; a generated drop-in,
+`project-control-runner.service.d/10-allowed-roots.conf`, adds one
+`BindReadOnlyPaths=` exception per configured root — never `BindPaths=`
+(read-write), and never a bare `/home` entry. This is systemd's own documented
+mechanism for adding narrow exceptions to `ProtectHome`/`ProtectSystem=strict`.
+The value is deliberately `tmpfs`, not `yes`: per `systemd.exec(5)`, a
+`BindReadOnlyPaths=` mount point cannot be created nested under a path
+`ProtectHome=yes` has made inaccessible (it is treated the same as
+`InaccessiblePaths=` for that purpose), so with `yes` the exception would
+never actually apply even though the unit still starts — `tmpfs` hides
+`/home` the same way but remains a real, mountable filesystem.
+`RNR-010` confirms the mount exists by reading the *kernel's* view of the
+running process's mount namespace (`/proc/<pid>/mountinfo`); `RNR-011`,
+`RNR-012` and `RNR-013` go further and prove the actual functional claim from
+inside that namespace (via `nsenter`) — the runner can read a fixture placed
+under the allowed root, cannot write to it, and cannot reach anything else
+under `/home`. None of this re-reads the same unit file the drop-in was
+generated from; a missing or non-functional mount FAILs these checks and is
+never reduced to a warning.
+
+### Path validation (`internal/projectpath`)
+
+Every project-registration operation passes through one function,
+`projectpath.Validate`, before touching the filesystem:
+
+1. Reject empty, non-UTF-8, or a path containing a null byte.
+2. Reject a non-absolute path.
+3. Reject an explicit `..` path segment outright — `filepath.Clean` would
+   collapse it silently, but a request that spells one out gets a clear
+   rejection instead of a silent renormalisation.
+4. Resolve with `filepath.EvalSymlinks`, which walks and resolves *every* path
+   component, not just the leaf — this is what makes a symlink escape
+   structurally impossible, whether the symlink is the target itself or an
+   intermediate directory anywhere along the path.
+5. Reject the allowed root itself as a project.
+6. Containment is a **path-component** check: `canonical == root` is already
+   rejected by (5), and otherwise `canonical` must start with `root +
+   separator`. A bare string prefix (`strings.HasPrefix(canonical, root)`
+   with no separator) would let `/home/asrin/Desktop-evil` be mistaken for a
+   child of `/home/asrin/Desktop`; the separator makes that impossible.
+
+The same rule (`WithinRoot`) governs the manifest scanner's own directory
+walk, and a directory entry that is a symlink is never followed at all — not
+resolved-and-checked, simply skipped — so a symlink planted inside a project
+cannot be used to read anything outside it.
+
+### Secret exclusion, structurally
+
+The manifest scanner (`internal/detect`) reads a file only if its name
+matches a fixed allowlist of known project-definition filenames (`package.json`,
+`go.mod`, `requirements.txt`, `Dockerfile`, …). There is no code path that
+opens a file by any other name, which is what makes `.env`, `id_rsa`,
+`credentials.json`, `*.pem` and everything else structurally unreachable —
+not filtered out, never reached. The scanner also skips `node_modules`,
+`.git`, `vendor`, virtual environments and build-output directories entirely,
+never follows a symlink (file or directory), never reads a non-regular file
+(FIFO, socket, device), and is bounded by depth, directory count, file count,
+per-file size and overall context timeout.
+
+### Git — the one execution exception
+
+`project.inspect` and `project.git.summary` shell out to the real `git`
+binary — the single exception to "the runner executes nothing" — because a
+from-scratch reimplementation of `git status` means parsing the binary index
+format and replicating gitignore semantics, and a subtly wrong
+reimplementation would silently misreport a project's state. The invocation
+is guarded on every axis that matters:
+
+- No shell, ever — `os/exec` with a fixed argv slice, never a string handed
+  to `/bin/sh`.
+- Every argv is a literal declared in `internal/gitinfo`. The only variable
+  component of any invocation is the directory, always the already-validated,
+  absolute `Canonical` path from `projectpath.Validate` (absolute, so it can
+  never be mistaken for a flag).
+- Only read-only, non-hook-invoking subcommands: `rev-parse`, `symbolic-ref`,
+  `show-ref`, `config --get-regexp`, `log`, and `status
+  --no-optional-locks`. Never fetch, pull, checkout, commit or merge.
+- `GIT_OPTIONAL_LOCKS=0` (env and flag) guarantees `git status` never writes
+  the refreshed stat cache to `.git/index` — asserted directly by a test that
+  stages exactly the condition a normal `git status` would otherwise "fix".
+- A from-scratch environment (`PATH` plus a small fixed `GIT_*` set) — no
+  inherited credential helper, SSH command, pager or editor.
+- The child inherits the runner's own systemd sandbox (seccomp filters and
+  namespace restrictions apply across `exec`), including
+  `RestrictAddressFamilies=AF_UNIX`, so even a bug here could not open a
+  network connection.
+
+Remote URLs are sanitised (`gitinfo.sanitiseRemoteURL`) before they ever leave
+the runner — the userinfo component of an `https://user:pass@host/...` remote
+is stripped; an SSH form (`git@host:org/repo.git`) carries no such component
+and passes through unchanged.
+
+### Inspection lifecycle and duplicate detection
+
+A folder scan never creates a project directly. It produces a `pending`
+`project_inspections` row — single-use, owned by the requesting user, expiring
+after 15 minutes — that the operator reviews and edits before confirming.
+`POST /api/projects` re-validates ownership, pending status and expiry inside
+the same transaction that consumes the inspection and inserts the project, so
+two concurrent confirmations of the same inspection cannot both succeed and a
+different user's inspection cannot be used.
+
+Duplicate registration is enforced by two partial unique indexes on
+`projects` — one on the canonical filesystem path, one on a normalised,
+credential-free repository identity (`normalizeRepositoryIdentity`) — both
+scoped to non-archived projects, at the database level, which is what makes it
+race-safe under concurrent creates rather than merely check-then-insert.
+`normalizeRepositoryIdentity` is deliberately conservative: an unparseable
+remote URL still normalises to *something* deterministic rather than `null`,
+so two different unparseable strings can never collide into the same identity.
+
+*Verified by:* `PG-006`, `PG-007`, `PRJ-001` … `PRJ-003`, `RNR-008` …
+`RNR-010`, and the project-registration integration suite
+(`apps/control-api/test/integration/projects.test.ts`), which runs the real
+Go runner binary — not a mock — against real fixture folders including a
+planted secret file and a symlink escape attempt.
 
 ---
 

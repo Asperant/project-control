@@ -136,6 +136,7 @@ for unit in project-control-runner.service project-control-stack.service \
             project-control-restore-test.service project-control-restore-test.timer; do
   rm -f "/etc/systemd/system/${unit}"
 done
+rm -rf /etc/systemd/system/project-control-runner.service.d
 systemctl daemon-reload
 systemctl reset-failed 2>/dev/null || true
 log_ok "systemd units removed"

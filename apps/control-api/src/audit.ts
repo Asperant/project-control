@@ -27,7 +27,18 @@ export type AuditEventType =
   | 'system.status.read'
   | 'system.migration.applied'
   | 'system.update'
-  | 'system.rollback';
+  | 'system.rollback'
+  | 'project.inspection.started'
+  | 'project.inspection.rejected'
+  | 'project.created'
+  | 'project.updated'
+  | 'project.rescanned'
+  | 'project.rescan.diff_applied'
+  | 'project.archived'
+  | 'project.reactivated'
+  | 'project.rule.changed'
+  | 'project.technology.changed'
+  | 'project.command.changed';
 
 export type AuditEntry = {
   eventType: AuditEventType;

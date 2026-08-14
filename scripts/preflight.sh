@@ -27,6 +27,30 @@ mkdir -p "$(dirname -- "$REPORT")"
 # Ports that this stack binds on the loopback interface.
 PC_REQUIRED_PORTS=(443 8443 5678 8780)
 
+# 443/8443 are not bound by this stack directly — they are published by
+# Tailscale Serve (see scripts/configure-tailscale.sh), which forwards them to
+# the loopback ports below. On an idempotent reinstall/update, tailscaled
+# already legitimately holds both ports, so occupation alone must not FAIL;
+# the actual Serve configuration is checked instead (see
+# tailscale_serve_route_status below).
+declare -A PC_TAILSCALE_SERVE_EXPECTED=(
+  [443]="http://127.0.0.1:8780"
+  [8443]="http://127.0.0.1:5678"
+)
+
+# 5678/8780 are the loopback ports this stack's own Compose services publish
+# directly (infra/compose/compose.yaml: caddy -> 127.0.0.1:8780:8780, n8n ->
+# 127.0.0.1:5678:5678). On an idempotent reinstall/update these are already
+# held by this deployment's own containers, so occupation alone must not
+# FAIL; Docker's own structured metadata is checked instead (see
+# compose_port_ownership_status below) — never the process name reported by
+# `ss`, which is frequently "docker-proxy" for every container on the host,
+# or unresolvable at all without root.
+declare -A PC_COMPOSE_EXPECTED_SERVICE=(
+  [5678]="n8n"
+  [8780]="caddy"
+)
+
 # Collected free-form sections for the Markdown report.
 declare -a SECTIONS=()
 section() { SECTIONS+=("$1"); }
@@ -161,23 +185,374 @@ $(fence "$EXISTING_VOLUMES")
 $(fence "$EXISTING_PROJECTS")
 "
 
+# tailscale_serve_route_status <port> <expected target, e.g. http://127.0.0.1:8780>
+#
+# Reads `tailscale serve status --json` (already fetched into
+# TS_SERVE_JSON/TS_SERVE_QUERIED by the caller) and checks that Tailscale
+# Serve is proxying <port> to exactly <expected target>, with Funnel disabled
+# for that route. Read-only — issues no `tailscale` command that changes
+# state. Prints a one-line reason and returns:
+#   0  route matches expected target, Funnel disabled            -> PASS
+#   1  no route configured, or it points somewhere else           -> FAIL
+#   2  tailscale serve status could not be read/parsed            -> FAIL
+#   3  route matches but Funnel is enabled for it                 -> FAIL
+tailscale_serve_route_status() {
+  local port="$1" expected="$2"
+  if [[ -z "$TS_SERVE_JSON" ]]; then
+    printf 'tailscale serve status is unavailable (daemon not running, or requires root)'
+    return 2
+  fi
+  printf '%s' "$TS_SERVE_JSON" | python3 -c '
+import json, sys
+port, expected = sys.argv[1], sys.argv[2]
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    print("tailscale serve status output could not be parsed")
+    sys.exit(2)
+tcp = data.get("TCP") or {}
+if port not in tcp:
+    print("no Tailscale Serve route is configured for port " + port)
+    sys.exit(1)
+web = data.get("Web") or {}
+match_key = next((k for k in web if k.endswith(":" + port)), None)
+if match_key is None:
+    print("port " + port + " has a TCP listener but no Serve Web handler")
+    sys.exit(1)
+handlers = (web.get(match_key) or {}).get("Handlers") or {}
+proxy = (handlers.get("/") or {}).get("Proxy", "")
+if proxy.rstrip("/") != expected.rstrip("/"):
+    print("port " + port + " is routed to " + (proxy or "(nothing)") + ", expected " + expected)
+    sys.exit(1)
+funnel = data.get("AllowFunnel") or {}
+if funnel.get(match_key):
+    print("Tailscale Funnel is enabled for " + match_key + " — Funnel publishes to the public internet")
+    sys.exit(3)
+print("port " + port + " is correctly routed to " + expected + " via Tailscale Serve (" + match_key + "), Funnel disabled")
+sys.exit(0)
+' "$port" "$expected" 2>/dev/null
+  return $?
+}
+
+# tailscale_daemon_running_status
+#
+# Reads `tailscale status --json` (already fetched into TS_STATUS_JSON by the
+# caller) and checks the daemon is actually running and connected to the
+# tailnet. Never uses systemctl, so it works for a non-root user exactly like
+# every other check here. Prints a one-line reason and returns 0 if running,
+# nonzero (FAIL) otherwise.
+tailscale_daemon_running_status() {
+  if [[ -z "$TS_STATUS_JSON" ]]; then
+    printf 'tailscale status is unavailable (daemon not running, or requires root)'
+    return 2
+  fi
+  printf '%s' "$TS_STATUS_JSON" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    print("tailscale status output could not be parsed")
+    sys.exit(2)
+state = data.get("BackendState", "")
+if state != "Running":
+    print("tailscale daemon backend state is " + (state or "unknown") + ", not Running")
+    sys.exit(1)
+print("tailscale daemon is running and connected")
+sys.exit(0)
+' 2>/dev/null
+  return $?
+}
+
+# tailscale_listener_addr_status <port>
+#
+# Confirms, using only `ss -H -ltn` (no -p — no process name or PID
+# involved, so it works identically for any user) and this host's own
+# Tailscale addresses (TS_OWN_IPS, from `tailscale ip -4`/`-6`), that every
+# real TCP listener bound to <port> sits on one of those addresses and
+# nothing else. A listener on 0.0.0.0, ::, loopback, a LAN IP, or any
+# unexpected extra listener alongside a legitimate one, all FAIL — never
+# silently accepted just because *a* listener also happens to be correct.
+tailscale_listener_addr_status() {
+  local port="$1"
+  if [[ -z "$TS_OWN_IPS" ]]; then
+    printf 'this host'\''s own Tailscale IP addresses could not be determined'
+    return 2
+  fi
+  printf '%s' "$TS_LISTENERS" | python3 -c '
+import sys
+port = sys.argv[1]
+own_ips = set(x.strip() for x in sys.argv[2].splitlines() if x.strip())
+matched = []
+for line in sys.stdin.read().splitlines():
+    fields = line.split()
+    if len(fields) < 4:
+        continue
+    local = fields[3]
+    if local.startswith("["):
+        if "]:" not in local:
+            continue
+        addr, _, p = local.partition("]:")
+        addr = addr[1:]
+    else:
+        if ":" not in local:
+            continue
+        addr, _, p = local.rpartition(":")
+    if p != port:
+        continue
+    matched.append(addr)
+if not matched:
+    print("no TCP listener found for port " + port)
+    sys.exit(1)
+unexpected = sorted(set(a for a in matched if a not in own_ips))
+expected = sorted(set(a for a in matched if a in own_ips))
+if unexpected:
+    print("port " + port + " has a listener on an unexpected address: " + ", ".join(unexpected))
+    sys.exit(1)
+if not expected:
+    print("port " + port + " has no listener on a Tailscale address of this host")
+    sys.exit(1)
+print("port " + port + " listens only on this host'"'"'s own Tailscale address(es): " + ", ".join(expected))
+sys.exit(0)
+' "$port" "$TS_OWN_IPS" 2>/dev/null
+  return $?
+}
+
+# tailscale_port_status <port> <expected target>
+#
+# Confirms this port is legitimately served by THIS host's own Tailscale
+# Serve configuration, without trusting any process name or PID:
+#   1. the Tailscale daemon is actually running and connected
+#      (`tailscale status --json`, never `systemctl`)
+#   2. Tailscale Serve proxies exactly this port to exactly the expected
+#      target, tailnet-only, with Funnel disabled
+#      (`tailscale serve status --json`)
+#   3. every real TCP listener on this port sits on this host's own
+#      Tailscale IPv4/IPv6 address, and nowhere else
+#      (`ss -H -ltn` cross-checked against `tailscale ip -4`/`-6`)
+# All three read-only; none change Tailscale state. Prints a one-line reason
+# and returns 0 only if all three hold.
+tailscale_port_status() {
+  local port="$1" expected="$2" reason status
+
+  fetch_tailscale_status_json
+  reason="$(tailscale_daemon_running_status)" && status=0 || status=$?
+  if (( status != 0 )); then
+    printf '%s' "$reason"
+    return "$status"
+  fi
+
+  fetch_tailscale_serve_json
+  reason="$(tailscale_serve_route_status "$port" "$expected")" && status=0 || status=$?
+  if (( status != 0 )); then
+    printf '%s' "$reason"
+    return "$status"
+  fi
+
+  fetch_tailscale_own_ips
+  fetch_tailscale_listeners
+  local listener_reason listener_status
+  listener_reason="$(tailscale_listener_addr_status "$port")" && listener_status=0 || listener_status=$?
+  printf '%s; %s' "$reason" "$listener_reason"
+  return "$listener_status"
+}
+
+# compose_port_ownership_status <port> <expected compose service> <container port, e.g. 5678/tcp>
+#
+# Verifies, using only Docker's own structured metadata (never a process
+# name), that <port> is currently published by exactly one running
+# container, that the container belongs to THIS deployment's Compose project
+# (PC_COMPOSE_PROJECT, see lib/common.sh) and the expected service, and that
+# it maps <container_port> to 127.0.0.1:<port> exactly — no 0.0.0.0, no IPv6
+# loopback, no other host port. Read-only: issues no `docker` command that
+# changes state. Prints a one-line reason and returns:
+#   0  confirmed project-control/<service> owns the port as expected -> PASS
+#   1  a different/foreign owner, or the mapping does not match      -> FAIL
+#   2  Docker metadata could not be read                             -> FAIL
+#   3  more than one container currently publishes this port         -> FAIL (ambiguous)
+compose_port_ownership_status() {
+  local port="$1" service="$2" container_port="$3"
+  local publishers status
+
+  publishers="$(docker ps --filter "publish=${port}" --format '{{.ID}}' 2>/dev/null)" && status=0 || status=$?
+  if (( status != 0 )); then
+    printf 'docker ps could not be queried (daemon unreachable or permission denied)'
+    return 2
+  fi
+
+  local count
+  count="$(printf '%s\n' "$publishers" | grep -c . || true)"
+  if (( count == 0 )); then
+    printf 'no Docker container publishes this port — held by a non-Docker process, or Docker cannot be queried'
+    return 1
+  fi
+  if (( count > 1 )); then
+    printf 'more than one container currently publishes this port: %s' "$(printf '%s' "$publishers" | tr '\n' ' ')"
+    return 3
+  fi
+
+  local cid="$publishers"
+  local proj svc
+  proj="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$cid" 2>/dev/null)" && status=0 || status=$?
+  if (( status != 0 )); then
+    printf 'could not read Compose labels for container %s' "$cid"
+    return 2
+  fi
+  svc="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' "$cid" 2>/dev/null)" || true
+
+  if [[ -z "$proj" ]]; then
+    printf 'container %s holding this port has no Compose project label' "$cid"
+    return 1
+  fi
+  if [[ "$proj" != "$PC_COMPOSE_PROJECT" ]]; then
+    printf 'port is held by a different Compose project: %s (container %s)' "$proj" "$cid"
+    return 1
+  fi
+  if [[ "$svc" != "$service" ]]; then
+    printf 'port is held by Compose service "%s", expected "%s" (container %s)' "${svc:-unknown}" "$service" "$cid"
+    return 1
+  fi
+
+  local bindings_json
+  bindings_json="$(docker inspect --format '{{json .NetworkSettings.Ports}}' "$cid" 2>/dev/null)" && status=0 || status=$?
+  if (( status != 0 )) || [[ -z "$bindings_json" ]]; then
+    printf 'could not read port bindings for container %s' "$cid"
+    return 2
+  fi
+
+  printf '%s' "$bindings_json" | python3 -c '
+import json, sys
+container_port, expected_port, cid = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    print("port binding metadata could not be parsed")
+    sys.exit(2)
+entries = data.get(container_port)
+if not entries:
+    print(container_port + " is not published by this container at all")
+    sys.exit(1)
+if len(entries) != 1:
+    print(container_port + " has ambiguous/multiple host bindings: " + json.dumps(entries))
+    sys.exit(3)
+binding = entries[0]
+host_ip = binding.get("HostIp", "")
+host_port = binding.get("HostPort", "")
+if host_ip != "127.0.0.1":
+    print(container_port + " is bound to " + (host_ip or "(empty)") + ", not exactly 127.0.0.1")
+    sys.exit(1)
+if host_port != expected_port:
+    print(container_port + " is bound to host port " + host_port + ", expected " + expected_port)
+    sys.exit(1)
+print(container_port + " is correctly published as 127.0.0.1:" + expected_port + " (container " + cid + ")")
+sys.exit(0)
+' "$container_port" "$port" "$cid" 2>/dev/null
+  return $?
+}
+
 # -----------------------------------------------------------------------------
 log_step "Port availability"
 # -----------------------------------------------------------------------------
 PORT_TABLE=""
 PORT_CONFLICT=0
 LISTENERS="$(ss -tulpnH 2>/dev/null || ss -tulpn 2>/dev/null || echo '')"
+
+# Fetched lazily, at most once, only if 443/8443 turn out to be occupied —
+# most runs (fresh install, or those ports genuinely free) never need them.
+# All four are read-only Tailscale/`ss` queries; none change any state, and
+# none require root (unlike resolving a socket's owning PID/process name).
+TS_SERVE_JSON=""
+TS_SERVE_QUERIED=0
+fetch_tailscale_serve_json() {
+  (( TS_SERVE_QUERIED )) && return
+  TS_SERVE_QUERIED=1
+  have tailscale || return
+  TS_SERVE_JSON="$(tailscale serve status --json 2>/dev/null || true)"
+}
+
+TS_STATUS_JSON=""
+TS_STATUS_QUERIED=0
+fetch_tailscale_status_json() {
+  (( TS_STATUS_QUERIED )) && return
+  TS_STATUS_QUERIED=1
+  have tailscale || return
+  TS_STATUS_JSON="$(tailscale status --json 2>/dev/null || true)"
+}
+
+# This host's own tailnet addresses — the only addresses 443/8443 may
+# legitimately listen on. `tailscale ip` needs no privilege beyond the
+# CLI-to-daemon socket every other `tailscale` command here already uses.
+TS_OWN_IPS=""
+TS_OWN_IPS_QUERIED=0
+fetch_tailscale_own_ips() {
+  (( TS_OWN_IPS_QUERIED )) && return
+  TS_OWN_IPS_QUERIED=1
+  have tailscale || return
+  local v4 v6
+  v4="$(tailscale ip -4 2>/dev/null || true)"
+  v6="$(tailscale ip -6 2>/dev/null || true)"
+  TS_OWN_IPS="$(printf '%s\n%s\n' "$v4" "$v6" | sed '/^$/d')"
+}
+
+# `ss -H -ltn`: TCP listeners only, no header, no DNS lookups, and
+# deliberately no `-p` — process/PID resolution is exactly the signal this
+# fix stops depending on, since it silently fails for a root-owned process
+# when preflight runs as a normal user.
+TS_LISTENERS=""
+TS_LISTENERS_QUERIED=0
+fetch_tailscale_listeners() {
+  (( TS_LISTENERS_QUERIED )) && return
+  TS_LISTENERS_QUERIED=1
+  TS_LISTENERS="$(ss -H -ltn 2>/dev/null || true)"
+}
+
 for port in "${PC_REQUIRED_PORTS[@]}"; do
   # Match ":<port> " at the end of a Local Address:Port field only.
   hit="$(printf '%s\n' "$LISTENERS" | awk -v p=":${port}" '$5 ~ (p "$") {print}' || true)"
-  if [[ -n "$hit" ]]; then
-    PORT_CONFLICT=1
-    owner="$(printf '%s' "$hit" | grep -oP 'users:\(\("\K[^"]+' | head -1 || echo 'unknown')"
-    PORT_TABLE+="| ${port} | **OCCUPIED** | \`${owner}\` |"$'\n'
-    record_check FAIL NET-001 "Port ${port} is already in use" "owner: ${owner} — install aborts; free the port manually"
-  else
+  if [[ -z "$hit" ]]; then
     PORT_TABLE+="| ${port} | free | — |"$'\n'
     record_check PASS NET-001 "Port ${port} is free" ""
+    continue
+  fi
+
+  owner="$(printf '%s' "$hit" | grep -oP 'users:\(\("\K[^"]+' | head -1 || echo 'unknown')"
+  expected_target="${PC_TAILSCALE_SERVE_EXPECTED[$port]:-}"
+  expected_service="${PC_COMPOSE_EXPECTED_SERVICE[$port]:-}"
+
+  if [[ -n "$expected_target" ]]; then
+    # Never gate on the `ss`-reported owner: resolving the name/PID of a
+    # root-owned process like tailscaled routinely fails for a normal user,
+    # which is exactly the bug this branch used to have (owner: "unknown"
+    # FAILed a perfectly healthy deployment). Instead verify the daemon,
+    # the Serve route/Funnel state and the real listener addresses — all
+    # read-only, all usable without root. The owner string is kept only as
+    # extra diagnostic detail below, never as a precondition.
+    reason="$(tailscale_port_status "$port" "$expected_target")" && route_status=0 || route_status=$?
+    if [[ "$route_status" -eq 0 ]]; then
+      PORT_TABLE+="| ${port} | in use by Tailscale Serve (expected) | \`tailnet -> ${expected_target}\` |"$'\n'
+      record_check PASS NET-001 "Port ${port} is correctly served by this host's own Tailscale Serve configuration" "$reason"
+    else
+      PORT_CONFLICT=1
+      PORT_TABLE+="| ${port} | **OCCUPIED** | \`${owner}\` |"$'\n'
+      record_check FAIL NET-001 "Port ${port} is occupied but Tailscale verification failed" "${reason:-unable to verify Tailscale configuration} (ss-reported owner: ${owner}) — run: sudo ./pcctl configure-tailscale"
+    fi
+  elif [[ -n "$expected_service" ]]; then
+    # Do not trust the process name alone here either — `ss` reports every
+    # container's proxy as "docker-proxy" (or nothing at all without root)
+    # regardless of which container or Compose project it belongs to. Ask
+    # Docker's own metadata instead.
+    reason="$(compose_port_ownership_status "$port" "$expected_service" "${port}/tcp")" && route_status=0 || route_status=$?
+    if [[ "$route_status" -eq 0 ]]; then
+      PORT_TABLE+="| ${port} | in use by project-control (expected) | \`${expected_service} -> 127.0.0.1:${port}\` |"$'\n'
+      record_check PASS NET-001 "Port ${port} is held by the project-control ${expected_service} container, as expected" "$reason"
+    else
+      PORT_CONFLICT=1
+      PORT_TABLE+="| ${port} | **OCCUPIED** | \`${owner}\` |"$'\n'
+      record_check FAIL NET-001 "Port ${port} is occupied but not by the expected project-control ${expected_service} container" "${reason:-unable to verify Docker ownership} — install aborts; free the port manually"
+    fi
+  else
+    PORT_CONFLICT=1
+    PORT_TABLE+="| ${port} | **OCCUPIED** | \`${owner}\` |"$'\n'
+    record_check FAIL NET-001 "Port ${port} is already in use" "owner: ${owner} — install aborts; free the port manually"
   fi
 done
 

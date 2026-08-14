@@ -11,9 +11,14 @@
 //     binary, so it cannot be reached from the network even by mistake.
 //   - Access is granted by group ownership of the socket (0660, group
 //     project-control), which is the only credential involved.
-//   - Executes nothing. There is no exec, no shell, no script interpreter, and
-//     no code path that turns caller input into a command. Operations are
-//     compiled in.
+//   - Executes no caller-supplied command, ever — there is no shell, no
+//     script interpreter, and no code path that turns caller input into an
+//     argv. Operations are compiled in. The one narrow exception is the `git`
+//     binary, invoked by the project-registration operations with a fixed,
+//     hardcoded argv per subcommand and only against a directory that has
+//     already been validated by internal/projectpath; see internal/gitinfo's
+//     package doc for the full guardrail list and the rationale for this
+//     being safer than a from-scratch reimplementation of `git status`.
 //   - Every operation has a timeout, an output cap and a concurrency slot.
 //   - No dependency outside the Go standard library.
 package main
@@ -31,6 +36,7 @@ import (
 	"time"
 
 	"github.com/project-control/runner/internal/operations"
+	"github.com/project-control/runner/internal/projectpath"
 	"github.com/project-control/runner/internal/registry"
 	"github.com/project-control/runner/internal/server"
 )
@@ -47,9 +53,12 @@ func main() {
 
 func run() error {
 	var (
-		socketPath  = flag.String("socket", envOr("PC_RUNNER_SOCKET", "/run/project-control/runner.sock"), "Unix socket path")
-		socketGroup = flag.String("socket-gid", envOr("PC_RUNNER_SOCKET_GID", ""), "numeric GID permitted to use the socket")
-		workingDir  = flag.String("working-dir", envOr("PC_RUNNER_WORKING_DIR", "/srv/project-control/runner"), "runner working directory")
+		socketPath       = flag.String("socket", envOr("PC_RUNNER_SOCKET", "/run/project-control/runner.sock"), "Unix socket path")
+		socketGroup      = flag.String("socket-gid", envOr("PC_RUNNER_SOCKET_GID", ""), "numeric GID permitted to use the socket")
+		workingDir       = flag.String("working-dir", envOr("PC_RUNNER_WORKING_DIR", "/srv/project-control/runner"), "runner working directory")
+		allowedRootsFile = flag.String("allowed-project-roots-file",
+			envOr("PC_RUNNER_ALLOWED_PROJECT_ROOTS_FILE", "/srv/project-control/config/allowed-project-roots.conf"),
+			"root-owned file listing allowed project roots, one absolute path per line")
 		maxConc     = flag.Int("max-concurrent", envOrInt("PC_RUNNER_MAX_CONCURRENT", 4), "maximum concurrent operations")
 		maxOutput   = flag.Int("max-output-runes", envOrInt("PC_RUNNER_MAX_OUTPUT", 8192), "maximum characters per output string")
 		logLevel    = flag.String("log-level", envOr("PC_RUNNER_LOG_LEVEL", "info"), "log level: debug|info|warn|error")
@@ -92,11 +101,25 @@ func run() error {
 	// Drop any inherited umask looseness for files this process creates.
 	syscall.Umask(0o077)
 
+	// --- Allowed project roots -------------------------------------------------
+	// Missing or unreadable is deliberately non-fatal: system.health and
+	// runner.selftest do not depend on it, and a diagnostics-only runner is
+	// more useful than a runner that refuses to start over a file it does not
+	// itself manage (root/pcctl does). Every project-registration operation
+	// degrades to a clear "no_allowed_roots_configured" result instead.
+	allowedRoots, rootsErr := projectpath.LoadAllowedRoots(*allowedRootsFile)
+	if rootsErr != nil {
+		logger.Warn("allowed project roots not loaded; project registration operations are disabled until this is fixed",
+			"file", *allowedRootsFile, "error", rootsErr.Error())
+		allowedRoots = nil
+	}
+
 	reg, err := registry.New(operations.All(operations.Config{
-		WorkingDir: resolvedWorkingDir,
-		SocketPath: *socketPath,
-		Version:    version,
-		StartedAt:  time.Now(),
+		WorkingDir:          resolvedWorkingDir,
+		SocketPath:          *socketPath,
+		Version:             version,
+		StartedAt:           time.Now(),
+		AllowedProjectRoots: allowedRoots,
 	})...)
 	if err != nil {
 		return fmt.Errorf("cannot build operation registry: %w", err)
@@ -105,6 +128,7 @@ func run() error {
 	if *selfCheck {
 		logger.Info("configuration valid",
 			"socket", *socketPath,
+			"allowedProjectRoots", len(allowedRoots),
 			"socketGid", gid,
 			"workingDir", resolvedWorkingDir,
 			"operations", reg.Names())

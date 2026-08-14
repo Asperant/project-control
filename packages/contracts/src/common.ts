@@ -45,3 +45,7 @@ export type ComponentReport = z.infer<typeof componentReportSchema>;
 export type Timestamp = z.infer<typeof timestampSchema>;
 export type Uuid = z.infer<typeof uuidSchema>;
 export type Sha256 = z.infer<typeof sha256Schema>;
+
+/** Uniform body for every `DELETE` endpoint across the API. */
+export const deletedResponseSchema = z.object({ deleted: z.literal(true) });
+export type DeletedResponse = z.infer<typeof deletedResponseSchema>;

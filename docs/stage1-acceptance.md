@@ -152,13 +152,16 @@ existed before installation.
 
 | Suite | Count | Command |
 | --- | --- | --- |
-| Contracts (schema validation) | 12 | `pnpm --filter @project-control/contracts test` |
-| Control API unit | 83 | `pnpm --filter @project-control/control-api test:unit` |
-| Control API integration (real PostgreSQL) | 44 | `pnpm --filter @project-control/control-api test:integration` |
-| Web client | 15 | `pnpm --filter @project-control/web test` |
-| Go runner (race detector) | 20 | `cd apps/runner && go test -race ./...` |
+| Contracts (schema validation) | 27 | `pnpm --filter @project-control/contracts test` |
+| Control API unit | 102 | `pnpm --filter @project-control/control-api test:unit` |
+| Control API integration (real PostgreSQL) | 64 | `pnpm --filter @project-control/control-api test:integration` |
+| Web client | 30 | `pnpm --filter @project-control/web test` |
+| Go runner (race detector) | 81 | `cd apps/runner && go test -race ./...` |
 | `verify` | ~60 checks | `./pcctl verify` |
 | `verify-security` | ~70 checks | `./pcctl verify-security` |
+
+Counts above include the project registration feature (folder inspection,
+technology/git detection, allowed-roots enforcement, inspection lifecycle).
 
 ### What the security-relevant tests actually assert
 
@@ -201,5 +204,7 @@ redaction and truncation.
 3. **Rollback does not revert migrations.** Deliberate — see
    [update-rollback.md](update-rollback.md).
 4. **No secondary backup destination.** Google Drive is a single off-site target.
-5. **The runner has two read-only operations.** Real project commands are
-   explicitly out of Stage 1 scope.
+5. **The runner exposes only read-only operations** (health/selftest plus
+   project path validation, inspection, and git summary). Executing a
+   project's own test/build/lint commands is explicitly out of scope — command
+   definitions are stored as inert metadata only.

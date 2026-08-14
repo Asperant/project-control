@@ -6,6 +6,24 @@
 # The unit is where most of the runner's confinement actually lives. The binary
 # refuses to run as root, but everything below is what stops a compromised
 # runner from reaching the rest of the host even as an unprivileged user.
+#
+# A generated drop-in at project-control-runner.service.d/10-allowed-roots.conf
+# (written by scripts/install.sh from config/allowed-project-roots.conf) adds a
+# per-root BindReadOnlyPaths= exception to ProtectHome=tmpfs below — the *only*
+# way this unit can read anywhere under /home, and always read-only. See that
+# script for why this lives in a drop-in rather than here: the set of allowed
+# roots is host-specific deployment configuration, not part of the unit itself.
+#
+# ProtectHome= is deliberately "tmpfs", not "yes": systemd cannot create a
+# BindReadOnlyPaths= mount point nested under a path that ProtectHome=yes has
+# made inaccessible (it is treated the same as InaccessiblePaths= for this
+# purpose — see systemd.exec(5)), so with "yes" the allowed-roots bind mount
+# above silently never applies, even though the unit still starts. "tmpfs"
+# hides /home exactly the same way (an empty, ephemeral, per-unit filesystem —
+# nothing written there ever reaches the real disk or survives a restart) but
+# is a real mountable filesystem, so BindReadOnlyPaths= can mount an allowed
+# root back into it. With no allowed roots configured this is indistinguishable
+# from ProtectHome=yes: all of /home is empty and inaccessible either way.
 # =============================================================================
 
 [Unit]
@@ -82,7 +100,7 @@ RestrictSUIDSGID=yes
 
 # --- Filesystem -------------------------------------------------------------
 ProtectSystem=strict
-ProtectHome=yes
+ProtectHome=tmpfs
 PrivateTmp=yes
 # The only writable paths. Note what is absent: no /var/run/docker.sock, no
 # /etc, no other project's directory.

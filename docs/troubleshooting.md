@@ -139,6 +139,35 @@ docker inspect project-control-api --format '{{.HostConfig.GroupAdd}}'
 
 ---
 
+## Project registration issues
+
+See [`project-registration.md`](project-registration.md) for the full user
+flow. Common failures:
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `no_allowed_roots_configured` on every "Inspect" | `config/allowed-project-roots.conf` is missing or empty | `sudo ./pcctl install` creates it with the default root; add more roots by editing the file, then re-run install |
+| `outside_allowed_roots` for a path that looks correct | the path is not actually under a configured root, or a symlink resolves outside it | `cat /srv/project-control/config/allowed-project-roots.conf`; the panel shows the *canonical* (symlink-resolved) path in the error |
+| `not_found` for a path you can see in a terminal | the runner cannot read it — check the systemd drop-in applied, and that the path isn't behind a permission the `project-runner` user genuinely lacks | `sudo cat /etc/systemd/system/project-control-runner.service.d/10-allowed-roots.conf`; `sudo -u project-runner test -r <path> && echo readable` |
+| Added a new root but inspecting a path under it still fails | the drop-in and runner were not regenerated/restarted after editing the config file by hand | `sudo ./pcctl install` (idempotent — regenerates the drop-in and restarts the runner only if something changed) |
+| "The host runner is unavailable" on Inspect/Rescan | `project-control-runner.service` is not running | see [The runner is down](#the-runner-is-down) above |
+| A project shows "Unreachable" on its folder | the folder was moved, deleted, or a mount was removed since it was registered | use **Rescan** to confirm; the project's location is marked inaccessible rather than the project being deleted |
+| Rescan is blocked with "repository identity has changed" | the folder's git remote changed since the project was registered — this is treated as a high-severity change on purpose | if this is expected (e.g. the remote was renamed), check **I confirm this folder now points at a different repository** and apply again |
+| "A project is already registered at this folder" / "against this repository" | the canonical path or the normalised git remote identity already belongs to another active (non-archived) project | archive the other project first, or register the intended one |
+| `pcctl verify-security` reports `RNR-010` FAIL/`RNR-011` FAIL even though `PRJ-001`/`PRJ-002`/`PRJ-003` all PASS and the drop-in file exists | the config and drop-in are correct, but the bind mount never actually applied in the runner's live mount namespace — see the kernel-level check below | confirm the base unit uses `ProtectHome=tmpfs`, not `ProtectHome=yes` (`systemctl show project-control-runner -p ProtectHome`); `sudo ./pcctl install` self-heals this by restarting the runner and re-verifying the mount, but a manual `sudo systemctl restart project-control-runner` also applies it |
+
+Kernel-level confirmation that a configured root is genuinely read-only in the
+runner's own mount namespace (not just declared so in a unit file):
+
+```bash
+sudo -u project-runner true 2>/dev/null; \
+runner_pid="$(systemctl show -p MainPID --value project-control-runner.service)"; \
+sudo awk -v root="/home/asrin/Desktop" '$5 == root {print $6}' "/proc/${runner_pid}/mountinfo"
+# expect a comma-separated options field starting with "ro"
+```
+
+---
+
 ## n8n problems
 
 ### Credentials disappeared after a restart

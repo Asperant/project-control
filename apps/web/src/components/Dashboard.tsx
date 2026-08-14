@@ -6,15 +6,13 @@ import type {
 } from '@project-control/contracts';
 import { ApiError, api } from '../api-client';
 import { StatusBadge } from './StatusBadge';
+import { ProjectsRoot } from './projects/ProjectsRoot';
 
 const POLL_INTERVAL_MS = 15_000;
 
 /**
- * System health dashboard.
- *
- * Stage 1 scope: render one card per subsystem, show session details, run the
- * artifact self-test on demand, and sign out. No project management UI — that is
- * explicitly a later stage.
+ * Panel shell: a tab switch between the system health view (Stage 1) and
+ * project registration (this stage), plus session details and sign-out.
  */
 export function Dashboard({
   session,
@@ -25,13 +23,77 @@ export function Dashboard({
   onSignedOut: () => void;
   onSessionExpired: () => void;
 }): React.JSX.Element {
+  const [tab, setTab] = useState<'system' | 'projects'>('projects');
+  const canWriteProjects = session.user.role === 'admin' || session.user.role === 'operator';
+
+  return (
+    <>
+      <a className="skip-link" href="#main-content">Skip to content</a>
+
+      <header className="app-header">
+        <h1>Project Control</h1>
+
+        <nav className="tab-nav" aria-label="Sections">
+          <button type="button" className={tab === 'projects' ? 'tab-active' : ''} onClick={() => setTab('projects')}>
+            Projects
+          </button>
+          <button type="button" className={tab === 'system' ? 'tab-active' : ''} onClick={() => setTab('system')}>
+            System
+          </button>
+        </nav>
+
+        <div className="spacer" />
+
+        <div className="session-info">
+          <span>
+            Signed in as <strong>{session.user.displayName}</strong> ({session.user.role})
+          </span>
+          <SignOutButton onSignedOut={onSignedOut} />
+        </div>
+      </header>
+
+      <main id="main-content">
+        {tab === 'projects' ? (
+          <ProjectsRoot canWrite={canWriteProjects} onSessionExpired={onSessionExpired} />
+        ) : (
+          <SystemPanel session={session} onSessionExpired={onSessionExpired} />
+        )}
+      </main>
+    </>
+  );
+}
+
+function SignOutButton({ onSignedOut }: { onSignedOut: () => void }): React.JSX.Element {
+  const [signingOut, setSigningOut] = useState(false);
+  async function handleSignOut(): Promise<void> {
+    setSigningOut(true);
+    try {
+      await api.logout();
+    } finally {
+      onSignedOut();
+    }
+  }
+  return (
+    <button type="button" onClick={() => void handleSignOut()} disabled={signingOut}>
+      {signingOut ? 'Signing out…' : 'Sign out'}
+    </button>
+  );
+}
+
+/** The original Stage 1 system-health view, unchanged apart from losing its own header/sign-out (now shared above). */
+function SystemPanel({
+  session,
+  onSessionExpired,
+}: {
+  session: AuthSessionResponse;
+  onSessionExpired: () => void;
+}): React.JSX.Element {
   const [status, setStatus] = useState<SystemStatusResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [selfTest, setSelfTest] = useState<ArtifactSelfTestResponse | null>(null);
   const [selfTestError, setSelfTestError] = useState<string | null>(null);
   const [selfTestBusy, setSelfTestBusy] = useState(false);
-  const [signingOut, setSigningOut] = useState(false);
 
   const refresh = useCallback(
     async (signal?: AbortSignal): Promise<void> => {
@@ -103,42 +165,18 @@ export function Dashboard({
     }
   }
 
-  async function handleSignOut(): Promise<void> {
-    setSigningOut(true);
-    try {
-      await api.logout();
-    } finally {
-      onSignedOut();
-    }
-  }
-
   const expires = new Date(session.session.expiresAt);
 
   return (
     <>
-      <a className="skip-link" href="#main-content">Skip to content</a>
+      {status && (
+        <p className="hint" style={{ margin: '0 0 1rem' }}>
+          Overall status: <StatusBadge status={status.overall} /> · session expires{' '}
+          <span title={expires.toISOString()}>{expires.toLocaleString()}</span>
+        </p>
+      )}
 
-      <header className="app-header">
-        <h1>Project Control</h1>
-        {status && <StatusBadge status={status.overall} />}
-
-        <div className="spacer" />
-
-        <div className="session-info">
-          <span>
-            Signed in as <strong>{session.user.displayName}</strong> ({session.user.role})
-          </span>
-          <span title={expires.toISOString()}>
-            Session expires {expires.toLocaleString()}
-          </span>
-          <button type="button" onClick={() => void handleSignOut()} disabled={signingOut}>
-            {signingOut ? 'Signing out…' : 'Sign out'}
-          </button>
-        </div>
-      </header>
-
-      <main id="main-content">
-        {error && (
+      {error && (
           <div className="alert alert-error" role="alert">
             {error}
             <p className="hint">
@@ -254,7 +292,6 @@ export function Dashboard({
             </article>
           </div>
         </section>
-      </main>
     </>
   );
 }

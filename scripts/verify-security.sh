@@ -264,27 +264,35 @@ if git -C "$PC_REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
   # Tracked files only: an untracked local scratch file is not a leak.
   tracked="$(git -C "$PC_REPO_ROOT" ls-files 2>/dev/null || true)"
 
-  findings=0
+  # Documentation and this scanner necessarily mention the patterns.
+  candidates=""
   while IFS= read -r file; do
     [[ -f "${PC_REPO_ROOT}/${file}" ]] || continue
-    # Documentation and this scanner necessarily mention the patterns.
     case "$file" in
       *.md|scripts/verify-security.sh|*/redact*|*.test.ts|*_test.go) continue ;;
     esac
+    candidates+="${file}"$'\n'
+  done <<<"$tracked"
 
-    if grep -nEi \
-      -e '(password|passwd|secret|api[_-]?key|token)[[:space:]]*[:=][[:space:]]*["'\'']?[A-Za-z0-9/+_-]{16,}' \
-      -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' \
-      -e '\b[0-9]{8,12}:[A-Za-z0-9_-]{30,}\b' \
-      -e '\bAKIA[0-9A-Z]{16}\b' \
-      "${PC_REPO_ROOT}/${file}" 2>/dev/null \
-      | grep -vE '(_FILE|example|EXAMPLE|placeholder|<your|CHANGEME|\$\{|xxxxx|REDACTED)' \
-      | grep -vE "[:=][[:space:]]*:'" \
-      | grep -vE '[:=][[:space:]]*[A-Za-z_$][A-Za-z0-9_.]*[,;)[:space:]]*$' >/dev/null; then
+  # A real classifier, not a single regex: a "keyword = value" match is only
+  # a finding when the value is an actual literal (quoted, or a digit-bearing
+  # unquoted blob in shell KEY=value form) — never when it is a bare
+  # identifier/reference (a variable name, an env var name, a psql-style
+  # :'var' substitution target), a /run/secrets/... path, or a recognised
+  # safe test sentinel. PEM headers, AWS access-key IDs and Telegram-bot-
+  # token-shaped strings are matched independently of the keyword logic.
+  # See lib/secret-scan.py — also exercised directly by
+  # tests/secret-scanner-regression.sh.
+  scan_findings="$(printf '%s' "$candidates" | python3 "${PC_LIB_DIR}/secret-scan.py" "$PC_REPO_ROOT" 2>/dev/null || true)"
+
+  findings=0
+  if [[ -n "$scan_findings" ]]; then
+    while IFS= read -r file; do
+      [[ -n "$file" ]] || continue
       record_check FAIL GIT-001 "Possible secret in ${file}" "review before committing"
       findings=$((findings+1))
-    fi
-  done <<<"$tracked"
+    done <<<"$scan_findings"
+  fi
 
   (( findings == 0 )) && record_check PASS GIT-001 "No credential-shaped literal in tracked files" ""
 
@@ -302,8 +310,11 @@ if git -C "$PC_REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
     record_check FAIL GIT-003 ".gitignore does not exclude secrets/" ""
   fi
 
-  # Only .example env files may be tracked.
-  if printf '%s' "$tracked" | grep -E '\.env$' | grep -v '\.example' >/dev/null; then
+  # A tracked .env/.env.* file, matched by path COMPONENT (basename), never
+  # by a bare substring — e.g. infra/versions.lock.env must never match just
+  # because its filename happens to end in the four characters ".env".
+  # Only .example files in that family are treated as safe templates.
+  if printf '%s' "$tracked" | grep -E '(^|/)\.env($|\.)' | grep -v '\.example$' >/dev/null; then
     record_check FAIL GIT-004 "A .env file is tracked" ""
   else
     record_check PASS GIT-004 "No .env file is tracked" ""
@@ -406,12 +417,40 @@ if systemctl is-active --quiet project-control-runner.service 2>/dev/null; then
     record_check PASS RNR-001 "The runner runs as ${runner_user}" ""
   fi
 
+  # Each directive has its own set of systemd-recognised "hardened" values —
+  # a single shared allowlist would either miss a directive's real hardened
+  # values (ProtectHome's are "yes"/"read-only"/"tmpfs", never "strict") or
+  # accept a value that means nothing for it (e.g. ProtectSystem=tmpfs is
+  # not a real setting). ProtectHome=tmpfs is this deployment's deliberate
+  # choice (see infra/systemd/project-control-runner.service and
+  # docs/security-model.md): it hides /home exactly as "yes" does, but,
+  # unlike "yes", still allows the allowed-project-roots BindReadOnlyPaths=
+  # exception to actually mount (systemd cannot create a bind-mount point
+  # nested under a path ProtectHome=yes has made inaccessible). RNR-010/011/
+  # 012/013 below independently prove that mount is real, read-only, and
+  # scoped to exactly the configured root — this check only confirms the
+  # directive itself is one of systemd's own hardened values, exactly, not
+  # by substring.
+  declare -A RUNNER_HARDENED_VALUES=(
+    [NoNewPrivileges]="yes"
+    [ProtectSystem]="strict"
+    [PrivateTmp]="yes"
+    [ProtectHome]="yes read-only tmpfs"
+    [RestrictSUIDSGID]="yes"
+  )
   for directive in NoNewPrivileges ProtectSystem PrivateTmp ProtectHome RestrictSUIDSGID; do
     value="$(systemctl show -p "$directive" --value project-control-runner.service 2>/dev/null || echo '')"
-    case "$value" in
-      yes|strict|true) record_check PASS RNR-002 "Runner ${directive}=${value}" "" ;;
-      *)               record_check FAIL RNR-002 "Runner ${directive}=${value:-unset}" "expected a hardened value" ;;
-    esac
+    # Normalize away incidental whitespace before the exact-token match
+    # below; systemd's own --value output is already a single bare token
+    # (e.g. "tmpfs"), never a substring-matchable sentence.
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    accepted=" ${RUNNER_HARDENED_VALUES[$directive]} "
+    if [[ -n "$value" && "$accepted" == *" ${value} "* ]]; then
+      record_check PASS RNR-002 "Runner ${directive}=${value}" ""
+    else
+      record_check FAIL RNR-002 "Runner ${directive}=${value:-unset}" "expected one of: ${RUNNER_HARDENED_VALUES[$directive]}"
+    fi
   done
 
   caps="$(systemctl show -p CapabilityBoundingSet --value project-control-runner.service 2>/dev/null || echo '')"
@@ -483,6 +522,178 @@ PY
   esac
 else
   record_check SKIP RNR-007 "Runner raw-command rejection probe" "socket not readable by this user"
+fi
+
+# Live proof that path traversal / out-of-root paths are rejected by
+# project.inspect. Distinct from RNR-007: a rejected path is a *successful*
+# response with result.valid=false, not an operation-level failure, so the
+# check inspects result.valid rather than the top-level ok flag.
+if [[ -S "$PC_RUNNER_SOCKET" ]] && have python3 && (is_root || [[ -r "$PC_RUNNER_SOCKET" ]]); then
+  path_probe_result="$(python3 - "$PC_RUNNER_SOCKET" <<'PY' 2>/dev/null || echo "error"
+import json, socket, sys
+sock_path = sys.argv[1]
+hostile_paths = [
+    "/etc/passwd",
+    "../../../../etc/passwd",
+    "/root/.ssh/id_rsa",
+    "relative/not/absolute",
+]
+
+def probe(path):
+    payload = {"requestId": "sec-probe-path01", "operation": "project.inspect", "params": {"path": path}}
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(5)
+    s.connect(sock_path)
+    s.sendall((json.dumps(payload) + "\n").encode())
+    data = s.recv(65536).decode()
+    s.close()
+    resp = json.loads(data.strip())
+    result = resp.get("result", {}) or {}
+    return resp.get("ok") is True and result.get("valid") is True
+
+accepted = False
+for p in hostile_paths:
+    try:
+        if probe(p):
+            accepted = True
+    except Exception:
+        pass
+print("ACCEPTED" if accepted else "REJECTED")
+PY
+)"
+  case "$path_probe_result" in
+    REJECTED) record_check PASS RNR-008 "Runner rejects hostile paths via project.inspect" "4 hostile paths refused" ;;
+    ACCEPTED) record_check FAIL RNR-008 "Runner ACCEPTED a hostile path via project.inspect" "critical" ;;
+    *)        record_check WARN RNR-008 "Runner path-rejection probe inconclusive" "$path_probe_result" ;;
+  esac
+else
+  record_check SKIP RNR-008 "Runner path-rejection probe" "socket not readable by this user"
+fi
+
+# =============================================================================
+# 7b. Project registration — allowed-root read-only enforcement
+# =============================================================================
+log_step "Project registration: allowed-root confinement"
+
+ALLOWED_ROOTS_FILE="${PC_ROOT}/config/allowed-project-roots.conf"
+RUNNER_DROPIN_FILE="/etc/systemd/system/project-control-runner.service.d/10-allowed-roots.conf"
+
+if [[ -f "$RUNNER_DROPIN_FILE" ]]; then
+  # Config-level sanity: only BindReadOnlyPaths may appear (never the
+  # read-write BindPaths=), and no entry may be the bare "/home" itself —
+  # that would defeat ProtectHome=tmpfs for the entire directory rather than
+  # the configured roots only. This is a fast sanity check, not the
+  # authoritative one; RNR-010 below verifies the real mount, from the
+  # kernel's own view of the runner's mount namespace.
+  if grep -qE '^BindPaths=' "$RUNNER_DROPIN_FILE"; then
+    record_check FAIL RNR-009 "Allowed-roots drop-in grants read-write access (BindPaths=)" "must be BindReadOnlyPaths= only"
+  elif grep -qE '^BindReadOnlyPaths=-?/home$' "$RUNNER_DROPIN_FILE"; then
+    record_check FAIL RNR-009 "Allowed-roots drop-in exposes all of /home" "must list specific subdirectories only"
+  else
+    record_check PASS RNR-009 "Allowed-roots drop-in uses read-only, non-/home exceptions only" ""
+  fi
+else
+  record_check WARN RNR-009 "Allowed-roots systemd drop-in is missing" "run: sudo ./pcctl install"
+fi
+
+runner_pid="$(systemctl show -p MainPID --value project-control-runner.service 2>/dev/null || echo 0)"
+[[ "$runner_pid" =~ ^[0-9]+$ ]] || runner_pid=0
+
+# Kernel-level proof, part 1: read the runner's own /proc/<pid>/mountinfo and
+# confirm the bind mount for the first configured root is actually read-only
+# in its mount namespace — a real security property, not a string in a unit
+# file. A missing mount entry is a genuine, proven absence of the promised
+# confinement (never merely WARNed away) — see RNR-011/012/013 below for the
+# deeper functional proof (can the runner actually read/write through it).
+ALLOWED_ROOTS=()
+first_root=""
+if is_root && [[ -f "$ALLOWED_ROOTS_FILE" ]]; then
+  mapfile -t ALLOWED_ROOTS < <(grep -vE '^[[:space:]]*(#|$)' "$ALLOWED_ROOTS_FILE" 2>/dev/null || true)
+  first_root="${ALLOWED_ROOTS[0]:-}"
+  if [[ -n "$first_root" && "$runner_pid" -gt 0 && -r "/proc/${runner_pid}/mountinfo" ]]; then
+    mount_line="$(awk -v root="$first_root" '$5 == root' "/proc/${runner_pid}/mountinfo" 2>/dev/null | head -1)"
+    if [[ -n "$mount_line" ]]; then
+      mount_opts="$(printf '%s' "$mount_line" | awk '{print $6}')"
+      if [[ "$mount_opts" == ro* ]]; then
+        record_check PASS RNR-010 "${first_root} is mounted read-only in the runner's mount namespace" "$mount_opts"
+      else
+        record_check FAIL RNR-010 "${first_root} is NOT read-only in the runner's mount namespace" "$mount_opts"
+      fi
+    else
+      record_check FAIL RNR-010 "No mount entry found for ${first_root} in the runner's namespace" "BindReadOnlyPaths did not apply — see RNR-011; restart: sudo systemctl restart project-control-runner"
+    fi
+  else
+    record_check SKIP RNR-010 "Allowed-root mount-table check" "no configured root, runner not running, or mountinfo unreadable"
+  fi
+else
+  record_check SKIP RNR-010 "Allowed-root mount-table check" "requires root"
+fi
+
+# Kernel-level proof, part 2: not merely a mount-table lookup — enter the
+# runner's own mount namespace (nsenter) and prove, from inside it, the
+# three claims docs/security-model.md makes about project registration: the
+# allowed root is genuinely readable, it is not writable, and nothing else
+# under /home is reachable. A safe, root-owned, temporary fixture is planted
+# directly under the allowed root (exactly as one would place a project
+# folder there) and removed immediately after — this deployment's own real
+# project files are never touched, and nothing here is destructive.
+if is_root && have nsenter && [[ -n "$first_root" && -d "$first_root" && "$runner_pid" -gt 0 \
+   && -r "/proc/${runner_pid}/ns/mnt" ]]; then
+  fixture_dir="${first_root}/.pc-verify-security-fixture"
+  fixture_file="${fixture_dir}/marker"
+  fixture_content="project-control read-only confinement fixture — safe to delete"
+  rm -rf -- "$fixture_dir" 2>/dev/null || true
+  trap 'rm -rf -- "$fixture_dir" 2>/dev/null' EXIT
+  mkdir -p -- "$fixture_dir"
+  printf '%s\n' "$fixture_content" >"$fixture_file"
+  chmod 0755 "$fixture_dir"
+  chmod 0644 "$fixture_file"
+
+  # 1. Read: the runner's own namespace can see the fixture's real content.
+  read_out="$(nsenter -t "$runner_pid" -m -- cat "$fixture_file" 2>/dev/null)" && read_status=0 || read_status=$?
+  if [[ "$read_status" -eq 0 && "$read_out" == "$fixture_content" ]]; then
+    record_check PASS RNR-011 "Runner can read a fixture file under ${first_root}" ""
+  else
+    record_check FAIL RNR-011 "Runner cannot read a fixture file under ${first_root}" "the allowed-root bind mount is not visible in the runner's namespace"
+  fi
+
+  # 2. Write must be rejected — this is a read-only bind mount.
+  nsenter -t "$runner_pid" -m -- sh -c "printf x >> '${fixture_file}'" >/dev/null 2>&1 \
+    && write_status=0 || write_status=$?
+  if [[ "$write_status" -ne 0 ]]; then
+    record_check PASS RNR-012 "Runner cannot write under ${first_root}" ""
+  else
+    record_check FAIL RNR-012 "Runner CAN write under ${first_root}" "the bind mount is not read-only — critical"
+  fi
+
+  # 3. Nothing outside the configured allowed root(s) leaks through: list
+  #    what the runner's namespace sees directly under the allowed root's
+  #    own parent directory (read-only; never inspects contents outside the
+  #    allowed root) and confirm every visible entry is itself a configured
+  #    allowed root — never an unrelated sibling that ProtectHome=tmpfs
+  #    should be hiding.
+  parent_dir="$(dirname -- "$first_root")"
+  ns_listing="$(nsenter -t "$runner_pid" -m -- ls -A -- "$parent_dir" 2>/dev/null)" || ns_listing=""
+  leaked=""
+  while IFS= read -r entry; do
+    [[ -n "$entry" ]] || continue
+    candidate="${parent_dir}/${entry}"
+    is_allowed=0
+    for r in "${ALLOWED_ROOTS[@]}"; do [[ "$r" == "$candidate" ]] && is_allowed=1; done
+    (( is_allowed )) || leaked+="${entry} "
+  done <<<"$ns_listing"
+  if [[ -n "$leaked" ]]; then
+    record_check FAIL RNR-013 "Unexpected entries visible under ${parent_dir} in the runner's namespace" "${leaked}must not be reachable outside the configured allowed root(s)"
+  else
+    record_check PASS RNR-013 "Only the configured allowed root(s) are reachable under ${parent_dir} in the runner's namespace" ""
+  fi
+
+  rm -rf -- "$fixture_dir" 2>/dev/null || true
+  trap - EXIT
+else
+  record_check SKIP RNR-011 "Runner read-access functional proof" "requires root, nsenter, a running runner, and an existing configured root"
+  record_check SKIP RNR-012 "Runner write-rejection functional proof" "requires root, nsenter, a running runner, and an existing configured root"
+  record_check SKIP RNR-013 "Allowed-root isolation functional proof" "requires root, nsenter, a running runner, and an existing configured root"
 fi
 
 # =============================================================================

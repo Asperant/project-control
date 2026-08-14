@@ -67,7 +67,12 @@ export async function dockerAvailable(): Promise<boolean> {
   }
 }
 
-export async function createHarness(): Promise<TestHarness> {
+export type CreateHarnessOptions = {
+  /** Points the Control API's RunnerClient at a real, already-listening runner socket instead of a nonexistent one. */
+  runnerSocketPath?: string;
+};
+
+export async function createHarness(options: CreateHarnessOptions = {}): Promise<TestHarness> {
   const suffix = randomBytes(6).toString('hex');
   const containerName = `pc-test-pg-${suffix}`;
   const superuserPassword = randomBytes(24).toString('base64url');
@@ -197,7 +202,7 @@ export async function createHarness(): Promise<TestHarness> {
       PC_LOGIN_LOCKOUT_THRESHOLD: '10',
       PC_ARTIFACT_ROOT: artifactRoot,
       PC_ARTIFACT_MAX_BYTES: '1048576',
-      PC_RUNNER_SOCKET: path.join(secretsDir, 'nonexistent-runner.sock'),
+      PC_RUNNER_SOCKET: options.runnerSocketPath ?? path.join(secretsDir, 'nonexistent-runner.sock'),
       PC_RUNNER_TIMEOUT_MS: '1000',
       PC_LOG_LEVEL: (process.env['PC_TEST_LOG_LEVEL'] ?? 'fatal') as string,
       PC_N8N_HEALTH_URL: 'http://127.0.0.1:1/healthz',

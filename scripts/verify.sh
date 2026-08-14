@@ -172,6 +172,20 @@ if [[ -n "$(container_id postgres)" ]] && is_root; then
   else
     record_check FAIL PG-005 "Expected 6 Stage 1 tables, found ${tables}" ""
   fi
+
+  project_tables="$(psql_super project_control "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('projects','project_technologies','project_rules','project_commands','project_inspections')" || echo 0)"
+  if [[ "${project_tables:-0}" == "5" ]]; then
+    record_check PASS PG-006 "All five project-registration tables exist" ""
+  else
+    record_check FAIL PG-006 "Expected 5 project-registration tables, found ${project_tables}" ""
+  fi
+
+  project_migrations="$(psql_super project_control "SELECT count(*) FROM schema_migrations WHERE version IN ('0003','0004')" || echo 0)"
+  if [[ "${project_migrations:-0}" == "2" ]]; then
+    record_check PASS PG-007 "Project-registration migrations (0003, 0004) applied" ""
+  else
+    record_check FAIL PG-007 "Project-registration migrations not fully applied" "found ${project_migrations}/2"
+  fi
 else
   record_check SKIP PG-001 "PostgreSQL checks" "requires root (to read secrets) and a running container"
 fi
@@ -201,6 +215,16 @@ if code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "${PORTAL}/api/
   fi
 else
   record_check FAIL API-002 "/api is not routed through Caddy" ""
+fi
+
+if code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "${PORTAL}/api/projects" 2>/dev/null)"; then
+  if [[ "$code" == "401" ]]; then
+    record_check PASS API-005 "/api/projects requires authentication" "HTTP 401"
+  else
+    record_check FAIL API-005 "/api/projects returned HTTP ${code}" "expected 401 for an anonymous request"
+  fi
+else
+  record_check FAIL API-005 "/api/projects is not routed through Caddy" ""
 fi
 
 # Health endpoints must NOT be exposed through the proxy.
@@ -254,6 +278,35 @@ if cid="$(container_id control-api)" && [[ -n "$cid" ]]; then
   else
     record_check FAIL RUN-003 "Runner socket is not usable inside the Control API container" ""
   fi
+fi
+
+# -----------------------------------------------------------------------------
+# Project registration — allowed roots configuration
+# -----------------------------------------------------------------------------
+ALLOWED_ROOTS_FILE="${PC_ROOT}/config/allowed-project-roots.conf"
+if [[ -f "$ALLOWED_ROOTS_FILE" ]]; then
+  mode="$(stat -c '%a' "$ALLOWED_ROOTS_FILE" 2>/dev/null || echo '')"
+  owner="$(stat -c '%U' "$ALLOWED_ROOTS_FILE" 2>/dev/null || echo '')"
+  if [[ "$mode" == "644" && "$owner" == "root" ]]; then
+    record_check PASS PRJ-001 "allowed-project-roots.conf is 0644 root-owned" ""
+  else
+    record_check FAIL PRJ-001 "allowed-project-roots.conf is ${mode:-unknown} owned by ${owner:-unknown}" "expected 644 root"
+  fi
+  root_count="$(grep -vcE '^[[:space:]]*(#|$)' "$ALLOWED_ROOTS_FILE" 2>/dev/null || echo 0)"
+  if (( root_count > 0 )); then
+    record_check PASS PRJ-002 "${root_count} allowed project root(s) configured" ""
+  else
+    record_check WARN PRJ-002 "No allowed project roots configured" "project registration will report no_allowed_roots_configured"
+  fi
+else
+  record_check WARN PRJ-001 "allowed-project-roots.conf does not exist yet" "run: sudo ./pcctl install"
+fi
+
+DROPIN_FILE="/etc/systemd/system/project-control-runner.service.d/10-allowed-roots.conf"
+if [[ -f "$DROPIN_FILE" ]]; then
+  record_check PASS PRJ-003 "systemd allowed-roots drop-in is installed" "$DROPIN_FILE"
+else
+  record_check WARN PRJ-003 "systemd allowed-roots drop-in is missing" "run: sudo ./pcctl install"
 fi
 
 # -----------------------------------------------------------------------------
