@@ -208,7 +208,7 @@ restore_and_check() {
   log_ok "${database}: all expected tables present (${#expected_tables[@]})"
 }
 
-restore_and_check project_control users sessions audit_events schema_migrations system_settings artifact_objects projects roadmap_milestones roadmap_tasks task_acceptance_criteria task_dependencies task_notes project_memory_entries project_checkpoints agent_runs agent_run_prompts agent_reports
+restore_and_check project_control users sessions audit_events schema_migrations system_settings artifact_objects projects roadmap_milestones roadmap_tasks task_acceptance_criteria task_dependencies task_notes project_memory_entries project_checkpoints agent_runs agent_run_prompts agent_reports work_sessions work_session_amendments
 
 # n8n owns its own schema, so the table list is not asserted; the check is that
 # the dump loads and contains something.
@@ -299,6 +299,53 @@ if [[ "${orphan_prompts:-0}" == "0" && "${orphan_reports:-0}" == "0" && "${orpha
   log_ok "project_control: Agent Run prompt/report/memory-provenance relationships and report-version uniqueness hold after restore"
 else
   fail "restored project_control has broken Agent Run relationships (orphan prompts=${orphan_prompts}, orphan reports=${orphan_reports}, orphan provenance=${orphan_provenance}, duplicate report versions=${duplicate_report_versions})"
+fi
+
+work_session_constraints="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM pg_constraint WHERE conname IN ('work_sessions_pkey','work_sessions_project_id_fkey','work_sessions_lifecycle_check','work_sessions_checkpoint_same_project_fk','work_session_amendments_pkey','work_session_amendments_work_session_id_fkey','project_checkpoints_project_id_id_key')" 2>/dev/null || echo 0)"
+one_open_indexes="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relname='work_sessions_one_open_per_project_idx' AND i.indisunique AND i.indpred IS NOT NULL" 2>/dev/null || echo 0)"
+work_session_triggers="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid WHERE t.tgenabled <> 'D' AND ((t.tgname='work_sessions_guard_mutation' AND t.tgrelid='work_sessions'::regclass AND p.proname='guard_work_session_mutation') OR (t.tgname='work_session_amendments_require_closed_parent' AND t.tgrelid='work_session_amendments'::regclass AND p.proname='guard_work_session_amendment_parent_closed'))" 2>/dev/null || echo 0)"
+if [[ "${work_session_constraints:-0}" == "7" && "${one_open_indexes:-0}" == "1" && "${work_session_triggers:-0}" == "2" ]]; then
+  log_ok "project_control: Work Session ownership, lifecycle, one-open, immutability and amendment protections restored"
+else
+  fail "restored project_control is missing Work Session protections (constraints=${work_session_constraints}/7, one-open indexes=${one_open_indexes}/1, triggers=${work_session_triggers}/2)"
+fi
+
+orphan_work_sessions="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM work_sessions s LEFT JOIN projects p ON p.id=s.project_id WHERE p.id IS NULL" 2>/dev/null || echo 0)"
+invalid_amendment_parents="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM work_session_amendments a LEFT JOIN work_sessions s ON s.id=a.work_session_id WHERE s.id IS NULL OR s.status<>'closed'" 2>/dev/null || echo 0)"
+cross_project_checkpoints="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM work_sessions s JOIN project_checkpoints c ON c.id=s.checkpoint_id WHERE c.project_id<>s.project_id" 2>/dev/null || echo 0)"
+invalid_session_lifecycle="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM work_sessions WHERE (status='open' AND (ended_at IS NOT NULL OR outcome_summary IS NOT NULL OR blockers IS NOT NULL OR next_action IS NOT NULL OR checkpoint_id IS NOT NULL)) OR (status='closed' AND (ended_at IS NULL OR ended_at<started_at OR outcome_summary IS NULL))" 2>/dev/null || echo 0)"
+open_session_duplicates="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM (SELECT project_id FROM work_sessions WHERE status='open' GROUP BY project_id HAVING count(*)>1) duplicates" 2>/dev/null || echo 0)"
+if [[ "${orphan_work_sessions:-0}" == "0" && "${invalid_amendment_parents:-0}" == "0" && "${cross_project_checkpoints:-0}" == "0" && "${invalid_session_lifecycle:-0}" == "0" && "${open_session_duplicates:-0}" == "0" ]]; then
+  log_ok "project_control: restored Work Session rows have no orphans, cross-project checkpoints, invalid lifecycle state or duplicate open sessions"
+else
+  fail "restored Work Session integrity failed (orphan sessions=${orphan_work_sessions}, invalid amendment parents=${invalid_amendment_parents}, cross-project checkpoints=${cross_project_checkpoints}, invalid lifecycle=${invalid_session_lifecycle}, duplicate open projects=${open_session_duplicates})"
+fi
+
+# This release continues writing checkpoint v2. Historical v1 rows must remain
+# valid, while v2 rows additionally carry the compact recentAgentActivity list.
+invalid_checkpoint_versions="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM project_checkpoints WHERE snapshot_version NOT IN (1,2) OR snapshot_json->'version' IS DISTINCT FROM to_jsonb(snapshot_version) OR (snapshot_version=2 AND jsonb_typeof(snapshot_json->'recentAgentActivity') IS DISTINCT FROM 'array')" 2>/dev/null || echo 0)"
+if [[ "${invalid_checkpoint_versions:-0}" == "0" ]]; then
+  log_ok "project_control: checkpoint v1/v2 compatibility holds after restore"
+else
+  fail "restored project_control has ${invalid_checkpoint_versions} incompatible checkpoint snapshot(s)"
 fi
 
 # =============================================================================

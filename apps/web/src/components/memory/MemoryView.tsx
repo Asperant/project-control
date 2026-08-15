@@ -15,8 +15,8 @@ const formatTime = (iso: string): string => new Date(iso).toLocaleString();
 type RelatedOptions = { milestones: RoadmapMilestone[]; tasks: Array<{ id: string; title: string; milestoneId: string }> };
 
 export function MemoryView({
-  projectId, canWrite, archived, onSessionExpired,
-}: { projectId: string; canWrite: boolean; archived: boolean; onSessionExpired: () => void }): React.JSX.Element {
+  projectId, canWrite, archived, onSessionExpired, checkpointToOpen,
+}: { projectId: string; canWrite: boolean; archived: boolean; onSessionExpired: () => void; checkpointToOpen?: string | null }): React.JSX.Element {
   const [context, setContext] = useState<ProjectContextResponse | null>(null);
   const [entries, setEntries] = useState<MemoryEntry[]>([]);
   const [checkpoints, setCheckpoints] = useState<CheckpointSummary[]>([]);
@@ -109,6 +109,10 @@ export function MemoryView({
       handleError(caught);
     }
   }
+
+  useEffect(() => {
+    if (checkpointToOpen) void openCheckpoint(checkpointToOpen);
+  }, [checkpointToOpen]);
 
   if (!context) return <p>{error ?? 'Loading memory…'}</p>;
 

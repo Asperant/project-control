@@ -18,4 +18,5 @@ export * from './projects.js';
 export * from './roadmap.js';
 export * from './agent-runs.js';
 export * from './memory.js';
+export * from './resume.js';
 export * from './errors.js';

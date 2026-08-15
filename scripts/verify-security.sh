@@ -468,6 +468,45 @@ if [[ -n "$(container_id postgres)" ]] && is_root; then
   else
     record_check FAIL PGS-012 "Sent-prompt/final-report immutability triggers are missing, disabled, or lack a guard" "found ${trigger_guard:-0}/2"
   fi
+
+  if docker exec -i "$pg_cid" env PGPASSWORD="$control_pw" \
+       psql -U control_app -d project_control -tAc \
+       "DELETE FROM work_sessions WHERE false" >/dev/null 2>&1; then
+    record_check FAIL PGS-013 "control_app can DELETE Work Sessions" "session history must never be physically deleted"
+  else
+    record_check PASS PGS-013 "control_app cannot DELETE Work Sessions" "no physical deletion"
+  fi
+
+  if docker exec -i "$pg_cid" env PGPASSWORD="$control_pw" \
+       psql -U control_app -d project_control -tAc \
+       "UPDATE work_session_amendments SET body=body WHERE false" >/dev/null 2>&1; then
+    record_check FAIL PGS-014 "control_app can UPDATE Work Session amendments" "corrections must be append-only"
+  else
+    record_check PASS PGS-014 "control_app cannot UPDATE Work Session amendments" "append-only privilege enforced"
+  fi
+
+  if docker exec -i "$pg_cid" env PGPASSWORD="$backup_pw" \
+       psql -U backup_reader -d project_control -tAc \
+       "INSERT INTO work_sessions (project_id, goal) SELECT id, 'probe' FROM projects WHERE false" >/dev/null 2>&1 \
+     || docker exec -i "$pg_cid" env PGPASSWORD="$backup_pw" \
+       psql -U backup_reader -d project_control -tAc \
+       "INSERT INTO work_session_amendments (work_session_id, body) SELECT id, 'probe' FROM work_sessions WHERE false" >/dev/null 2>&1; then
+    record_check FAIL PGS-015 "backup_reader can write Work Session history" "both tables must remain SELECT-only"
+  else
+    record_check PASS PGS-015 "backup_reader cannot write Work Sessions" "read-only enforced"
+  fi
+
+  work_session_guard="$(docker exec -i "$pg_cid" env PGPASSWORD="$control_pw" \
+       psql -U control_app -d project_control -tAc \
+       "SELECT count(*) FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid
+          WHERE t.tgenabled <> 'D' AND pg_get_functiondef(p.oid) ILIKE '%RAISE EXCEPTION%'
+            AND ((t.tgname='work_sessions_guard_mutation' AND t.tgrelid='work_sessions'::regclass AND p.proname='guard_work_session_mutation')
+              OR (t.tgname='work_session_amendments_require_closed_parent' AND t.tgrelid='work_session_amendments'::regclass AND p.proname='guard_work_session_amendment_parent_closed'))" 2>/dev/null | tr -d '[:space:]')"
+  if [[ "${work_session_guard:-0}" == "2" ]]; then
+    record_check PASS PGS-016 "Work Session immutability/lifecycle triggers are enabled and guarded" ""
+  else
+    record_check FAIL PGS-016 "Work Session immutability/lifecycle triggers are incomplete" "found ${work_session_guard:-0}/2"
+  fi
 else
   record_check SKIP PGS-001 "PostgreSQL role isolation" "requires root and a running postgres container"
 fi

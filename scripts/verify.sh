@@ -292,6 +292,48 @@ if [[ -n "$(container_id postgres)" ]] && is_root; then
   else
     record_check FAIL PG-022 "Prompt/report immutability triggers are missing or disabled" "found ${agent_run_triggers}/2"
   fi
+
+  work_session_tables="$(psql_super project_control "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('work_sessions','work_session_amendments')" || echo 0)"
+  if [[ "${work_session_tables:-0}" == "2" ]]; then
+    record_check PASS PG-023 "Both Work Session tables exist" ""
+  else
+    record_check FAIL PG-023 "Expected 2 Work Session tables, found ${work_session_tables}" ""
+  fi
+
+  work_session_migrations="$(psql_super project_control "SELECT count(*) FROM schema_migrations WHERE version IN ('0011','0012')" || echo 0)"
+  if [[ "${work_session_migrations:-0}" == "2" ]]; then
+    record_check PASS PG-024 "Work Session migrations (0011, 0012) applied" ""
+  else
+    record_check FAIL PG-024 "Work Session migrations not fully applied" "found ${work_session_migrations}/2"
+  fi
+
+  work_session_constraints="$(psql_super project_control "SELECT count(*) FROM pg_constraint WHERE conname IN ('work_sessions_pkey','work_sessions_project_id_fkey','work_sessions_lifecycle_check','work_sessions_checkpoint_same_project_fk','work_session_amendments_pkey','work_session_amendments_work_session_id_fkey','project_checkpoints_project_id_id_key')" || echo 0)"
+  if [[ "${work_session_constraints:-0}" == "7" ]]; then
+    record_check PASS PG-025 "Work Session ownership, lifecycle and same-project checkpoint constraints exist" ""
+  else
+    record_check FAIL PG-025 "Work Session constraints are incomplete" "found ${work_session_constraints}/7"
+  fi
+
+  one_open_index="$(psql_super project_control "SELECT count(*) FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relname='work_sessions_one_open_per_project_idx' AND i.indisunique AND pg_get_expr(i.indpred,i.indrelid) = '(status = ''open''::text)'" || echo 0)"
+  if [[ "${one_open_index:-0}" == "1" ]]; then
+    record_check PASS PG-026 "One-open-Work-Session partial unique index exists" ""
+  else
+    record_check FAIL PG-026 "One-open-Work-Session partial unique index is missing or incorrect" ""
+  fi
+
+  work_session_triggers="$(psql_super project_control "SELECT count(*) FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid WHERE t.tgenabled <> 'D' AND ((t.tgname='work_sessions_guard_mutation' AND t.tgrelid='work_sessions'::regclass AND p.proname='guard_work_session_mutation') OR (t.tgname='work_session_amendments_require_closed_parent' AND t.tgrelid='work_session_amendments'::regclass AND p.proname='guard_work_session_amendment_parent_closed'))" || echo 0)"
+  if [[ "${work_session_triggers:-0}" == "2" ]]; then
+    record_check PASS PG-027 "Work Session lifecycle and amendment triggers exist and are enabled" ""
+  else
+    record_check FAIL PG-027 "Work Session lifecycle/amendment triggers are missing or disabled" "found ${work_session_triggers}/2"
+  fi
+
+  work_session_acl="$(psql_super project_control "SELECT has_table_privilege('control_app','work_sessions','SELECT') AND has_table_privilege('control_app','work_sessions','INSERT') AND has_table_privilege('control_app','work_sessions','UPDATE') AND NOT has_table_privilege('control_app','work_sessions','DELETE,TRUNCATE') AND has_table_privilege('control_app','work_session_amendments','SELECT') AND has_table_privilege('control_app','work_session_amendments','INSERT') AND NOT has_table_privilege('control_app','work_session_amendments','UPDATE,DELETE,TRUNCATE') AND has_table_privilege('backup_reader','work_sessions','SELECT') AND has_table_privilege('backup_reader','work_session_amendments','SELECT') AND NOT has_table_privilege('backup_reader','work_sessions','INSERT,UPDATE,DELETE') AND NOT has_table_privilege('backup_reader','work_session_amendments','INSERT,UPDATE,DELETE')" || echo f)"
+  if [[ "$work_session_acl" == "t" ]]; then
+    record_check PASS PG-028 "Work Session role grants preserve least privilege and append-only history" ""
+  else
+    record_check FAIL PG-028 "Work Session role grants are too broad or incomplete" "review migrations/0012"
+  fi
 else
   record_check SKIP PG-001 "PostgreSQL checks" "requires root (to read secrets) and a running container"
 fi
@@ -382,6 +424,26 @@ if code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "${PORTAL}/api/
   fi
 else
   record_check FAIL API-010 "Agent Run endpoint is not routed through Caddy" ""
+fi
+
+if code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "${PORTAL}/api/projects/${ROADMAP_VERIFY_PROJECT}/resume" 2>/dev/null)"; then
+  if [[ "$code" == "401" ]]; then
+    record_check PASS API-011 "Resume endpoint requires authentication" "HTTP 401"
+  else
+    record_check FAIL API-011 "Resume endpoint returned HTTP ${code}" "expected 401 for an anonymous request"
+  fi
+else
+  record_check FAIL API-011 "Resume endpoint is not routed through Caddy" ""
+fi
+
+if code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "${PORTAL}/api/projects/${ROADMAP_VERIFY_PROJECT}/work-sessions" 2>/dev/null)"; then
+  if [[ "$code" == "401" ]]; then
+    record_check PASS API-012 "Work Session endpoints require authentication" "HTTP 401"
+  else
+    record_check FAIL API-012 "Work Session endpoint returned HTTP ${code}" "expected 401 for an anonymous request"
+  fi
+else
+  record_check FAIL API-012 "Work Session endpoint is not routed through Caddy" ""
 fi
 
 # Health endpoints must NOT be exposed through the proxy.

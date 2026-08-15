@@ -10,8 +10,12 @@
   raw-data builder shared with `context/`.
 - `apps/control-api/src/context/`: deterministic current-context / "Where was
   I?" composition — no AI, reads only.
+- `apps/control-api/src/resume/`: purpose-built deterministic Resume briefing;
+  roadmap selection policy stays server-side.
+- `apps/control-api/src/work-sessions/`: Work Session lifecycle, append-only
+  corrections, and atomic checkpoint-on-close transactions.
 - `apps/control-api/src/projects/guard.ts`: shared project-guard/archive-lock
-  helper reused by roadmap, memory and checkpoints.
+  helper reused by roadmap, memory, checkpoints and Work Sessions.
 - `apps/web/src/components/projects/`: project registration/detail UI.
 - `apps/web/src/components/roadmap/`: manual roadmap UI.
 - `apps/web/src/components/memory/`: manual project memory and checkpoint UI.
@@ -20,6 +24,7 @@
 - `scripts/`: install/update/backup/restore/verify operations.
 
 High-risk areas are migrations/role grants, auth/CSRF, append-only audit,
-project archive guards, dependency cycles, checkpoint immutability, update
-rollback, and runner confinement. Do not casually change compose exposure,
-secrets, runner mounts, or application database privileges.
+project archive guards, dependency cycles, checkpoint and closed-session
+immutability, one-open-session concurrency, checkpoint/session same-project
+ownership, update rollback, and runner confinement. Do not casually change
+compose exposure, secrets, runner mounts, or application database privileges.

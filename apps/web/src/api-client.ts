@@ -33,6 +33,10 @@ import {
   finalizeAgentReportResponseSchema,
   agentRunTimelineResponseSchema,
   duplicateAgentRunResponseSchema,
+  resumeProjectResponseSchema,
+  workSessionAmendmentResponseSchema,
+  workSessionListResponseSchema,
+  workSessionResponseSchema,
   type AgentRunListResponse,
   type AgentRunResponse,
   type AgentRunPromptResponse,
@@ -42,6 +46,15 @@ import {
   type FinalizeAgentReportResponse,
   type AgentRunTimelineResponse,
   type DuplicateAgentRunResponse,
+  type ResumeProjectResponse,
+  type WorkSessionAmendmentResponse,
+  type WorkSessionListResponse,
+  type WorkSessionListQuery,
+  type WorkSessionResponse,
+  type StartWorkSessionRequest,
+  type UpdateWorkSessionRequest,
+  type CloseWorkSessionRequest,
+  type AddWorkSessionAmendmentRequest,
   type AgentRunListQuery,
   type CreateAgentRunRequest,
   type UpdateAgentRunRequest,
@@ -432,4 +445,18 @@ export const api = {
   getAgentRunTimeline(projectId:string,runId:string,signal?:AbortSignal):Promise<AgentRunTimelineResponse>{return request(`/api/projects/${projectId}/agent-runs/${runId}/timeline`,agentRunTimelineResponseSchema,signal?{signal}:{});},
   getRelatedMemory(projectId:string,runId:string,signal?:AbortSignal):Promise<MemoryListResponse>{return request(`/api/projects/${projectId}/agent-runs/${runId}/related-memory`,memoryListResponseSchema,signal?{signal}:{});},
   promoteAgentRunToMemory(projectId:string,runId:string,body:CreateMemoryEntryRequest):Promise<MemoryEntryResponse>{return request(`/api/projects/${projectId}/agent-runs/${runId}/promote-memory`,memoryEntryResponseSchema,{method:'POST',body});},
+
+  // --- Resume / Work Sessions ---------------------------------------------------
+  getProjectResume(projectId:string,signal?:AbortSignal):Promise<ResumeProjectResponse>{return request(`/api/projects/${projectId}/resume`,resumeProjectResponseSchema,signal?{signal}:{});},
+  listWorkSessions(projectId:string,query:Partial<WorkSessionListQuery> = {},signal?:AbortSignal):Promise<WorkSessionListResponse>{
+    const params=new URLSearchParams();
+    for(const [key,value] of Object.entries(query)){if(value===undefined)continue;params.set(key,String(value));}
+    const qs=params.toString();
+    return request(`/api/projects/${projectId}/work-sessions${qs?`?${qs}`:''}`,workSessionListResponseSchema,signal?{signal}:{});
+  },
+  getWorkSession(projectId:string,sessionId:string,signal?:AbortSignal):Promise<WorkSessionResponse>{return request(`/api/projects/${projectId}/work-sessions/${sessionId}`,workSessionResponseSchema,signal?{signal}:{});},
+  startWorkSession(projectId:string,body:StartWorkSessionRequest):Promise<WorkSessionResponse>{return request(`/api/projects/${projectId}/work-sessions`,workSessionResponseSchema,{method:'POST',body});},
+  updateWorkSession(projectId:string,sessionId:string,body:UpdateWorkSessionRequest):Promise<WorkSessionResponse>{return request(`/api/projects/${projectId}/work-sessions/${sessionId}`,workSessionResponseSchema,{method:'PATCH',body});},
+  closeWorkSession(projectId:string,sessionId:string,body:CloseWorkSessionRequest):Promise<WorkSessionResponse>{return request(`/api/projects/${projectId}/work-sessions/${sessionId}/close`,workSessionResponseSchema,{method:'POST',body});},
+  addWorkSessionAmendment(projectId:string,sessionId:string,body:AddWorkSessionAmendmentRequest):Promise<WorkSessionAmendmentResponse>{return request(`/api/projects/${projectId}/work-sessions/${sessionId}/amendments`,workSessionAmendmentResponseSchema,{method:'POST',body});},
 };

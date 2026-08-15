@@ -12,6 +12,7 @@ import { AccessibilityBadge, ProjectPriorityBadge, ProjectStatusBadge, formatRel
 import { RoadmapView } from '../roadmap/RoadmapView';
 import { MemoryView } from '../memory/MemoryView';
 import { AgentRunsView } from '../agent-runs/AgentRunsView';
+import { ResumeView } from '../resume/ResumeView';
 
 export function ProjectDetail({
   projectId,
@@ -30,7 +31,8 @@ export function ProjectDetail({
   const [activity, setActivity] = useState<ProjectActivityEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [view, setView] = useState<'overview' | 'roadmap' | 'memory' | 'agent-runs'>('overview');
+  const [view, setView] = useState<'overview' | 'resume' | 'roadmap' | 'memory' | 'agent-runs'>('overview');
+  const [memoryCheckpointId, setMemoryCheckpointId] = useState<string | null>(null);
 
   const [editingInfo, setEditingInfo] = useState(false);
   const [form, setForm] = useState<{
@@ -211,15 +213,18 @@ export function ProjectDetail({
 
       <nav className="detail-tabs" aria-label="Project detail sections">
         <button type="button" aria-current={view === 'overview' ? 'page' : undefined} onClick={() => setView('overview')}>Overview</button>
+        <button type="button" aria-current={view === 'resume' ? 'page' : undefined} onClick={() => setView('resume')}>Resume</button>
         <button type="button" aria-current={view === 'roadmap' ? 'page' : undefined} onClick={() => setView('roadmap')}>Roadmap</button>
-        <button type="button" aria-current={view === 'memory' ? 'page' : undefined} onClick={() => setView('memory')}>Memory</button>
+        <button type="button" aria-current={view === 'memory' ? 'page' : undefined} onClick={() => { setMemoryCheckpointId(null); setView('memory'); }}>Memory</button>
         <button type="button" aria-current={view === 'agent-runs' ? 'page' : undefined} onClick={() => setView('agent-runs')}>Agent Runs</button>
       </nav>
 
-      {view === 'roadmap' ? (
+      {view === 'resume' ? (
+        <ResumeView projectId={projectId} canWrite={canWrite} archived={project.status === 'archived'} onSessionExpired={onSessionExpired} onOpenMemory={(checkpointId) => { setMemoryCheckpointId(checkpointId ?? null); setView('memory'); }} />
+      ) : view === 'roadmap' ? (
         <RoadmapView projectId={projectId} canWrite={canWrite} archived={project.status === 'archived'} onSessionExpired={onSessionExpired} />
       ) : view === 'memory' ? (
-        <MemoryView projectId={projectId} canWrite={canWrite} archived={project.status === 'archived'} onSessionExpired={onSessionExpired} />
+        <MemoryView projectId={projectId} canWrite={canWrite} archived={project.status === 'archived'} onSessionExpired={onSessionExpired} checkpointToOpen={memoryCheckpointId} />
       ) : view === 'agent-runs' ? (
         <AgentRunsView projectId={projectId} canWrite={canWrite} archived={project.status === 'archived'} onSessionExpired={onSessionExpired} />
       ) : <>

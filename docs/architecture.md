@@ -10,6 +10,22 @@ atomic. Progress is derived from task status. Activity reuses append-only
 `audit_events`; no second history subsystem exists. The runner, project files,
 n8n, and Git are outside this data path. See [manual-roadmap.md](manual-roadmap.md).
 
+## Resume and Work Session domain
+
+`GET /api/projects/:projectId/resume` composes a read-only operational view in
+the Control API. React renders that response and never reselects the recommended
+roadmap action. The composer reuses Current Context (including the accepted
+`recentAgentWork` loader), current memory, roadmap state and Work Session reads;
+it makes no LLM, runner, Git, n8n or filesystem call.
+
+Work Session mutations use the existing project guard and append-only audit
+transaction pattern. Closing with a checkpoint builds the current deterministic
+v2 checkpoint snapshot, inserts it, links it to the session and writes required
+audit events within one PostgreSQL transaction. Any failure rolls back all
+effects. Closed rows remain immutable; corrections are separate, append-only
+`work_session_amendments` rows. See
+[work-sessions-resume.md](work-sessions-resume.md).
+
 ## Overview
 
 ```
@@ -269,6 +285,14 @@ which also doubles as the rescan-diff staging area via its nullable
 filesystem path and, separately, per normalised repository identity; both are
 scoped to non-archived projects, so an archived project never blocks a fresh
 registration of the same folder or repository.
+
+Work Session tables (migrations `0011`/`0012`): `work_sessions` and
+`work_session_amendments`. A partial unique index permits at most one open row
+per project. A composite foreign key `(project_id, checkpoint_id)` prevents
+cross-project checkpoint links. Lifecycle and mutation triggers protect open
+field rules, closed history and closed-parent-only amendments; grants deny
+physical deletion and make amendments append-only for `control_app` while
+`backup_reader` remains SELECT-only.
 
 Migrations are checksum-verified: editing an applied migration aborts start-up
 rather than letting the recorded history diverge from the live schema. A

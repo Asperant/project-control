@@ -32,6 +32,36 @@ function mapDetail(row: CheckpointRow): CheckpointDetail {
   return { ...mapSummary(row), snapshot: row.snapshot_json };
 }
 
+/**
+ * Inserts a checkpoint using an existing transaction and already-locked
+ * project. Work Session closure uses this so snapshot creation, linkage and
+ * both audit records commit or roll back as one unit.
+ */
+export async function createCheckpointInTransaction(
+  client: DbClient,
+  project: { id: string; status: string; name: string },
+  actorId: string,
+  sessionNote: string | undefined,
+  audit: MutationAudit,
+): Promise<CheckpointDetail> {
+  assertProjectMutable(project);
+  const snapshot = await buildCheckpointSnapshot(client, project.id, project);
+  const id = randomUUID();
+  await client.query(
+    `INSERT INTO project_checkpoints (id, project_id, snapshot_version, snapshot_json, session_note, created_by)
+     VALUES ($1,$2,$3,$4::jsonb,$5,$6)`,
+    [id, project.id, snapshot.version, JSON.stringify(snapshot), sessionNote ?? null, actorId],
+  );
+  await audit(client, 'checkpoint.created', {
+    projectId: project.id,
+    checkpointId: id,
+    snapshotVersion: snapshot.version,
+    sessionNotePresent: Boolean(sessionNote),
+  });
+  const { rows } = await client.query<CheckpointRow>('SELECT * FROM project_checkpoints WHERE id=$1', [id]);
+  return mapDetail(rows[0]!);
+}
+
 export async function createCheckpoint(
   db: Db, projectId: string, actorId: string, sessionNote: string | undefined, audit: MutationAudit,
 ): Promise<CheckpointDetail> {
@@ -46,19 +76,7 @@ export async function createCheckpoint(
     );
     const project = rows[0];
     if (!project) throw notFound('Project not found.');
-    assertProjectMutable(project);
-
-    const snapshot = await buildCheckpointSnapshot(client, projectId, project);
-    const id = randomUUID();
-    await client.query(
-      `INSERT INTO project_checkpoints (id, project_id, snapshot_version, snapshot_json, session_note, created_by)
-       VALUES ($1,$2,$3,$4::jsonb,$5,$6)`,
-      [id, projectId, snapshot.version, JSON.stringify(snapshot), sessionNote ?? null, actorId],
-    );
-    await audit(client, 'checkpoint.created', { projectId, checkpointId: id, snapshotVersion: snapshot.version, sessionNotePresent: Boolean(sessionNote) });
-
-    const { rows: inserted } = await client.query<CheckpointRow>('SELECT * FROM project_checkpoints WHERE id=$1', [id]);
-    return mapDetail(inserted[0]!);
+    return createCheckpointInTransaction(client, project, actorId, sessionNote, audit);
   });
 }
 

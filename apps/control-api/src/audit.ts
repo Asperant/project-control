@@ -52,6 +52,8 @@ export type AuditEventType =
   | 'memory.created' | 'memory.updated' | 'memory.pinned' | 'memory.unpinned'
   | 'memory.archived' | 'memory.reactivated' | 'memory.superseded'
   | 'checkpoint.created' | 'checkpoint.archived'
+  | 'work_session.started' | 'work_session.goal_updated' | 'work_session.closed'
+  | 'work_session.amendment_added' | 'work_session.checkpoint_created'
   | 'agentrun.created' | 'agentrun.updated' | 'agentrun.sent' | 'agentrun.started'
   | 'agentrun.completed' | 'agentrun.failed' | 'agentrun.cancelled'
   | 'agentrun.archived' | 'agentrun.reactivated' | 'agentrun.duplicated'

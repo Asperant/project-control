@@ -15,6 +15,8 @@ import { projectRoutes } from './routes/projects.js';
 import { roadmapRoutes } from './routes/roadmap.js';
 import { memoryRoutes } from './routes/memory.js';
 import { agentRunsRoutes } from './routes/agent-runs.js';
+import { workSessionRoutes } from './routes/work-sessions.js';
+import { resumeRoutes } from './routes/resume.js';
 
 /**
  * Builds the Fastify instance.
@@ -207,6 +209,8 @@ export async function buildApp(ctx: AppContext) {
   await app.register(roadmapRoutes(ctx));
   await app.register(memoryRoutes(ctx));
   await app.register(agentRunsRoutes(ctx));
+  await app.register(workSessionRoutes(ctx));
+  await app.register(resumeRoutes(ctx));
 
   return app;
 }

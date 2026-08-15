@@ -29,3 +29,24 @@
 - Detail: `apps/control-api/src/projects/store.ts` contains a literal NUL
   separator used in hashing, so some text tools classify it as binary.
 - Status: watching; unrelated to roadmap behavior.
+
+## Concurrent or rewritten Work Session history
+
+- Category: database / security / user data
+- Impact: two open sessions could create competing focus, or a closed outcome
+  could be silently rewritten and make the Resume briefing untrustworthy.
+- Mitigation: partial unique open-session index, row/project locks, lifecycle
+  check, closed-row mutation trigger, no DELETE grant and append-only amendments.
+- How to test: Work Session integration tests plus `PG-025`–`PG-028` and
+  `PGS-013`–`PGS-016` on a migrated deployment.
+- Status: mitigated; concurrency and role-grant tests remain release gates.
+
+## Session/checkpoint ownership or partial close
+
+- Category: database / release
+- Impact: a session could link another project's checkpoint, or expose a closed
+  session without the requested checkpoint/audit history.
+- Mitigation: composite same-project foreign key and one transaction for
+  checkpoint creation, linkage, close and audit events. Restore-test checks
+  orphan, cross-project and lifecycle invariants.
+- Status: mitigated; rollback remains database-transaction based.

@@ -30,6 +30,10 @@ const CHANGE_CATEGORIES: Record<string, ChangeCategory> = {
   'memory.superseded': { prefix: '~', label: (n) => `${n} memory entr${n === 1 ? 'y' : 'ies'} superseded` },
   'memory.archived': { prefix: '-', label: (n) => `${n} memory entr${n === 1 ? 'y' : 'ies'} archived` },
   'checkpoint.archived': { prefix: '-', label: (n) => `${n} checkpoint${n === 1 ? '' : 's'} archived` },
+  'work_session.started': { prefix: '+', label: (n) => `${n} work session${n === 1 ? '' : 's'} started` },
+  'work_session.goal_updated': { prefix: '~', label: (n) => `${n} work-session goal${n === 1 ? '' : 's'} updated` },
+  'work_session.closed': { prefix: '✓', label: (n) => `${n} work session${n === 1 ? '' : 's'} closed` },
+  'work_session.amendment_added': { prefix: '+', label: (n) => `${n} work-session correction${n === 1 ? '' : 's'} added` },
   'agentrun.sent': { prefix: '+', label: (n) => `${n} agent run${n === 1 ? '' : 's'} sent` },
   'agentrun.completed': { prefix: '✓', label: (n) => `${n} agent run${n === 1 ? '' : 's'} completed` },
   'agentrun.failed': { prefix: '!', label: (n) => `${n} agent run${n === 1 ? '' : 's'} failed` },
@@ -62,7 +66,7 @@ async function computeChangesSinceCheckpoint(
       WHERE occurred_at > $1
         AND event_type <> 'checkpoint.created'
         AND (
-          event_type LIKE 'roadmap.%' OR event_type LIKE 'memory.%' OR event_type = 'checkpoint.archived'
+          event_type LIKE 'roadmap.%' OR event_type LIKE 'memory.%' OR event_type LIKE 'work_session.%' OR event_type = 'checkpoint.archived'
           OR event_type IN ('agentrun.sent','agentrun.completed','agentrun.failed','agentrun.cancelled',
                              'agentreport.finalized','agentrun.memory_promoted','agentvalidation.updated')
         )

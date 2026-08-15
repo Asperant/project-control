@@ -320,6 +320,47 @@ button.primary {
 .agent-report-rendered :is(h1,h2,h3) { font-size:1rem; }
 .agent-report-rendered pre { overflow-x:auto; background:var(--surface-alt); padding:.5rem; border-radius:6px; }
 
+/* --- Resume / work sessions ------------------------------------------------ */
+.resume-view { display:grid; gap:1rem; min-width:0; }
+.resume-view section + section { margin-top:0; }
+.resume-view h3 { margin:0; font-size:.9rem; letter-spacing:.02em; }
+.resume-primary { border-left:4px solid var(--accent); }
+.resume-copy { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; }
+.resume-warning { color:var(--warn); }
+.resume-list,.resume-history { margin:.25rem 0 0; padding-left:1.25rem; display:grid; gap:.6rem; min-width:0; }
+.resume-list li,.resume-history li { min-width:0; overflow-wrap:anywhere; }
+.resume-list li { border-top:1px solid var(--border); padding-top:.45rem; }
+.resume-list li:first-child { border-top:0; padding-top:0; }
+.resume-list li > span,.resume-list li > small { display:block; }
+.resume-list li > small { color:var(--text-muted); margin-top:.15rem; }
+.resume-list li > p { margin:.35rem 0 0; white-space:pre-wrap; overflow-wrap:anywhere; }
+.resume-columns { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1rem; }
+.resume-session-details { display:grid; gap:.45rem; min-width:0; }
+.resume-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:.5rem; }
+.resume-start { min-width:0; }
+.resume-start .field { margin-bottom:.5rem; }
+.resume-text-button { justify-self:start; max-width:100%; white-space:normal; overflow-wrap:anywhere; text-align:left; }
+.resume-history { list-style-position:outside; }
+.resume-history > li { border-top:1px solid var(--border); padding:.75rem 0 .25rem .25rem; }
+.resume-history > li:first-child { border-top:0; padding-top:.25rem; }
+.resume-history > li > button { margin-top:.5rem; }
+.resume-amendments { border-left:3px solid var(--border); padding-left:.75rem; margin-top:.25rem; }
+.resume-amendments ol { margin:.35rem 0 0; padding-left:1.25rem; }
+.resume-amendments li { margin-top:.4rem; overflow-wrap:anywhere; }
+.resume-amendments time { display:block; color:var(--text-muted); font-family:var(--mono); font-size:.72rem; }
+.resume-dialog-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:flex-start; justify-content:center; padding:2rem 1rem; overflow-y:auto; z-index:50; }
+.resume-dialog { width:min(42rem,100%); max-height:calc(100dvh - 4rem); overflow-y:auto; }
+.resume-dialog .field { margin-bottom:.75rem; }
+.resume-dialog .alert { margin:.25rem 0; }
+
+@media (max-width:640px) {
+  .resume-view .card { padding:.8rem; }
+  .resume-view button,.resume-view textarea,.resume-view input[type="checkbox"] { min-height:44px; }
+  .resume-columns { grid-template-columns:1fr; }
+  .resume-dialog-backdrop { padding:.5rem; }
+  .resume-dialog { max-height:calc(100dvh - 1rem); }
+}
+
 /* --- Forms ----------------------------------------------------------------- */
 .login-wrap {
   min-height: 100dvh;
