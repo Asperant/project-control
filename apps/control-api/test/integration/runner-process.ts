@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -18,6 +18,10 @@ const exec = promisify(execFile);
 export type RunnerProcess = {
   socketPath: string;
   allowedRoot: string;
+  /** Canonical, pre-created directories the runner was started with on its
+   * write-enabled list, keyed by the name passed in `writeEnabledProjectNames`.
+   * Empty unless that option was used. */
+  writeEnabledPaths: Record<string, string>;
   stop: () => Promise<void>;
 };
 
@@ -49,8 +53,16 @@ async function waitForSocket(socketPath: string, timeoutMs = 10_000): Promise<vo
   throw new Error(`runner socket ${socketPath} did not appear within ${timeoutMs} ms`);
 }
 
+export type StartRunnerOptions = {
+  /** Directory names (created as direct children of the generated allowed
+   * root, before the runner starts) to place on the runner's write-enabled
+   * list — see internal/gitwrite. Only project.git.commit consults this;
+   * every read-only operation is unaffected by it. */
+  writeEnabledProjectNames?: string[];
+};
+
 /** Starts a real runner process with a single allowed root under a fresh temp directory. */
-export async function startRunnerProcess(): Promise<RunnerProcess> {
+export async function startRunnerProcess(options: StartRunnerOptions = {}): Promise<RunnerProcess> {
   const binaryPath = await buildRunnerBinary();
 
   const runtimeDir = await mkdtemp(path.join(tmpdir(), 'pc-test-runner-run-'));
@@ -59,6 +71,18 @@ export async function startRunnerProcess(): Promise<RunnerProcess> {
 
   const rootsFile = path.join(runtimeDir, 'allowed-roots.conf');
   await writeFile(rootsFile, `${allowedRoot}\n`, 'utf8');
+
+  const writeEnabledPaths: Record<string, string> = {};
+  for (const name of options.writeEnabledProjectNames ?? []) {
+    const dir = path.join(allowedRoot, name);
+    await mkdir(dir, { recursive: true });
+    // Resolved exactly the way projectpath.Validate resolves a live path
+    // (EvalSymlinks), so the runner's stored entry and the request-time
+    // canonical path are guaranteed to match byte-for-byte.
+    writeEnabledPaths[name] = await realpath(dir);
+  }
+  const writeEnabledFile = path.join(runtimeDir, 'write-enabled-projects.conf');
+  await writeFile(writeEnabledFile, `${Object.values(writeEnabledPaths).join('\n')}\n`, 'utf8');
 
   const socketPath = path.join(runtimeDir, 'runner.sock');
   const gid = typeof process.getgid === 'function' ? process.getgid() : undefined;
@@ -71,6 +95,7 @@ export async function startRunnerProcess(): Promise<RunnerProcess> {
       '--socket-gid', String(gid),
       '--working-dir', workingDir,
       '--allowed-project-roots-file', rootsFile,
+      '--write-enabled-projects-file', writeEnabledFile,
       '--max-concurrent', '4',
       '--log-level', 'error',
     ],
@@ -95,6 +120,7 @@ export async function startRunnerProcess(): Promise<RunnerProcess> {
   return {
     socketPath,
     allowedRoot,
+    writeEnabledPaths,
     stop: async () => {
       child.kill('SIGTERM');
       await new Promise((resolve) => {

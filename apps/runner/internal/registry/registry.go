@@ -25,10 +25,14 @@ type Handler func(ctx context.Context, params map[string]any) (map[string]any, e
 // ParamSpec describes one accepted parameter.
 type ParamSpec struct {
 	Name     string
-	Type     string // "string" | "bool" | "number"
+	Type     string // "string" | "bool" | "number" | "string[]"
 	Required bool
-	// MaxLength bounds string parameters. Zero means the default of 256.
+	// MaxLength bounds string parameters, and each element of a "string[]"
+	// parameter. Zero means the default of 256.
 	MaxLength int
+	// MaxItems bounds a "string[]" parameter's length. Zero means the
+	// default of 64. Unused for every other type.
+	MaxItems int
 }
 
 // Operation is a single registry entry.
@@ -169,6 +173,31 @@ func checkType(spec ParamSpec, value any) error {
 	case "number":
 		if _, ok := value.(json.Number); !ok {
 			return fmt.Errorf("parameter %q must be a number", spec.Name)
+		}
+	case "string[]":
+		items, ok := value.([]any)
+		if !ok {
+			return fmt.Errorf("parameter %q must be an array of strings", spec.Name)
+		}
+		maxItems := spec.MaxItems
+		if maxItems == 0 {
+			maxItems = 64
+		}
+		if len(items) > maxItems {
+			return fmt.Errorf("parameter %q exceeds %d items", spec.Name, maxItems)
+		}
+		maxLen := spec.MaxLength
+		if maxLen == 0 {
+			maxLen = 256
+		}
+		for i, item := range items {
+			s, ok := item.(string)
+			if !ok {
+				return fmt.Errorf("parameter %q[%d] must be a string", spec.Name, i)
+			}
+			if len(s) > maxLen {
+				return fmt.Errorf("parameter %q[%d] exceeds %d characters", spec.Name, i, maxLen)
+			}
 		}
 	default:
 		return fmt.Errorf("parameter %q has an unsupported declared type %q", spec.Name, spec.Type)

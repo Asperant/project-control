@@ -47,6 +47,10 @@ BACKUP
   backup [--check]       Run a backup now, or verify the repository.
   restore-test           Restore the latest snapshot into an isolated sandbox.
 
+REPOSITORY ACTIONS
+  enable-repo-writes <path>   Opt one registered project's .git into commit access.
+  disable-repo-writes <path>  Revoke it. See docs/repository-actions.md.
+
 VERIFICATION
   verify [--json]        Full functional verification.
   verify-security [--json]  Security posture verification.
@@ -104,6 +108,11 @@ case "$command" in
                           run_script backup.sh "$@" ;;
   restore-test)           require_root_for restore-test
                           run_script restore-test.sh "$@" ;;
+
+  enable-repo-writes)     require_root_for enable-repo-writes
+                          run_script repo-writes.sh enable "$@" ;;
+  disable-repo-writes)    require_root_for disable-repo-writes
+                          run_script repo-writes.sh disable "$@" ;;
 
   verify)                 run_script verify.sh "$@" ;;
   verify-security)        run_script verify-security.sh "$@" ;;

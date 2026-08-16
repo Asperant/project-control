@@ -14,7 +14,10 @@ const availableGit = {
     clean: false, stagedCount: 1, unstagedCount: 0, untrackedCount: 0,
     conflictedCount: 0, totalChangedCount: 1, filesTruncated: false,
   },
-  files: [{ path: 'src/app.ts', oldPath: null, state: 'modified' as const, staged: true, unstaged: false, untracked: false }],
+  files: [{
+    path: 'src/app.ts', oldPath: null, state: 'modified' as const, staged: true, unstaged: false, untracked: false,
+    size: 128, modifiedAt: '2026-08-15T10:00:00.000000000Z',
+  }],
   recentCommits: [{
     sha: 'a'.repeat(40), shortSha: 'aaaaaaa', subject: 'Safe metadata',
     authorName: 'Developer', authoredAt: '2026-08-15T10:00:00.000Z',

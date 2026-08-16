@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { DevelopmentStateResponse } from '@project-control/contracts';
 import { ApiError, api } from '../../api-client';
+import { ActionsPanel } from './ActionsPanel';
 
-type Props = { projectId: string; archived: boolean; onSessionExpired: () => void; initialData?: DevelopmentStateResponse };
+type Props = { projectId: string; archived: boolean; canWrite: boolean; onSessionExpired: () => void; initialData?: DevelopmentStateResponse };
 
 function comparisonLines(value: DevelopmentStateResponse['checkpointComparison']): string[] {
   if (value.status === 'no_git_checkpoint') return ['No Git-aware checkpoint exists yet.'];
@@ -14,7 +15,7 @@ function comparisonLines(value: DevelopmentStateResponse['checkpointComparison']
   return lines;
 }
 
-export function DevelopmentView({ projectId, archived, onSessionExpired, initialData }: Props): React.JSX.Element {
+export function DevelopmentView({ projectId, archived, canWrite, onSessionExpired, initialData }: Props): React.JSX.Element {
   const [state, setState] = useState<DevelopmentStateResponse | null>(initialData ?? null);
   const [loading, setLoading] = useState(!initialData);
   const [error, setError] = useState<string | null>(null);
@@ -71,6 +72,13 @@ export function DevelopmentView({ projectId, archived, onSessionExpired, initial
 
       <article className="card"><h3>6. GitHub</h3><p>{state.status === 'unavailable' ? 'GitHub detection is unavailable.' : state.github.detected ? 'GitHub repository detected. Live GitHub metadata is not configured.' : 'No GitHub origin detected.'}</p></article>
       <article className="card"><h3>7. Checkpoint Comparison</h3><ul className="development-comparison">{comparisonLines(state.checkpointComparison).map((line) => <li key={line}>{line}</li>)}</ul></article>
+
+      {liveMetadataAvailable && (
+        <ActionsPanel
+          projectId={projectId} archived={archived} canWrite={canWrite} development={state}
+          onSessionExpired={onSessionExpired} onCommitted={() => void load()}
+        />
+      )}
     </section>
   );
 }

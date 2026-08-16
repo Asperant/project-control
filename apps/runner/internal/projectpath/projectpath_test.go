@@ -208,6 +208,118 @@ func TestLoadAllowedRootsRejectsEmptyFile(t *testing.T) {
 	}
 }
 
+func TestLoadWriteEnabledProjectsParsesAndDeduplicates(t *testing.T) {
+	dir := t.TempDir()
+	projectA := filepath.Join(dir, "a")
+	projectB := filepath.Join(dir, "b")
+	_ = os.Mkdir(projectA, 0o755)
+	_ = os.Mkdir(projectB, 0o755)
+
+	confPath := filepath.Join(dir, "write-enabled.conf")
+	content := "# comment\n\n" + projectA + "\n" + projectB + "\n" + projectA + "\n"
+	if err := os.WriteFile(confPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	projects, err := LoadWriteEnabledProjects(confPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 2 {
+		t.Fatalf("got %d projects, want 2: %v", len(projects), projects)
+	}
+}
+
+func TestLoadWriteEnabledProjectsMissingFileIsEmptyNotError(t *testing.T) {
+	dir := t.TempDir()
+	projects, err := LoadWriteEnabledProjects(filepath.Join(dir, "does-not-exist.conf"))
+	if err != nil {
+		t.Fatalf("missing write-enabled file must not be an error, got %v", err)
+	}
+	if len(projects) != 0 {
+		t.Fatalf("got %d projects, want 0", len(projects))
+	}
+}
+
+func TestLoadWriteEnabledProjectsEmptyFileIsEmptyNotError(t *testing.T) {
+	dir := t.TempDir()
+	confPath := filepath.Join(dir, "write-enabled.conf")
+	if err := os.WriteFile(confPath, []byte("# only comments\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	projects, err := LoadWriteEnabledProjects(confPath)
+	if err != nil {
+		t.Fatalf("an all-comment write-enabled file must not be an error, got %v", err)
+	}
+	if len(projects) != 0 {
+		t.Fatalf("got %d projects, want 0", len(projects))
+	}
+}
+
+func TestLoadWriteEnabledProjectsRejectsRelativeEntry(t *testing.T) {
+	dir := t.TempDir()
+	confPath := filepath.Join(dir, "write-enabled.conf")
+	if err := os.WriteFile(confPath, []byte("relative/project\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadWriteEnabledProjects(confPath); err == nil {
+		t.Fatal("expected an error for a relative write-enabled entry")
+	}
+}
+
+func TestValidateWritableAcceptsAnExactlyListedProject(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "my-project")
+	if err := os.Mkdir(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	resolvedProject, _ := filepath.EvalSymlinks(project)
+
+	result, err := ValidateWritable([]string{root}, []string{resolvedProject}, project)
+	if err != nil {
+		t.Fatalf("ValidateWritable() error = %v, want nil", err)
+	}
+	if result.Canonical != resolvedProject {
+		t.Fatalf("Canonical = %q, want %q", result.Canonical, resolvedProject)
+	}
+}
+
+func TestValidateWritableRejectsAProjectNotOnTheList(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "my-project")
+	if err := os.Mkdir(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ValidateWritable([]string{root}, nil, project); !errors.Is(err, ErrWriteNotEnabled) {
+		t.Fatalf("error = %v, want ErrWriteNotEnabled", err)
+	}
+}
+
+func TestValidateWritableRejectsADescendantOfAWriteEnabledProject(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "my-project")
+	nested := filepath.Join(project, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	resolvedProject, _ := filepath.EvalSymlinks(project)
+
+	// Enabling writes for `project` must not silently enable writes for a
+	// directory nested underneath it: ValidateWritable requires an exact
+	// match, never a prefix match.
+	if _, err := ValidateWritable([]string{root}, []string{resolvedProject}, nested); !errors.Is(err, ErrWriteNotEnabled) {
+		t.Fatalf("error = %v, want ErrWriteNotEnabled", err)
+	}
+}
+
+func TestValidateWritablePropagatesUnderlyingValidateErrors(t *testing.T) {
+	root := t.TempDir()
+	if _, err := ValidateWritable([]string{root}, nil, "relative/path"); !errors.Is(err, ErrNotAbsolute) {
+		t.Fatalf("error = %v, want ErrNotAbsolute", err)
+	}
+}
+
 func TestWithinRoot(t *testing.T) {
 	if !WithinRoot("/a/b", "/a/b/c") {
 		t.Fatal("expected /a/b/c to be within /a/b")

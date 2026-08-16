@@ -48,6 +48,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -138,6 +139,21 @@ type ChangedFile struct {
 	Staged    bool
 	Unstaged  bool
 	Untracked bool
+	// Size and ModifiedAt describe the *working tree* file at inspection
+	// time. Both are "" / 0 when unavailable — State == "deleted", or a stat
+	// race between the status read and this follow-up lstat. Populated by a
+	// bounded post-pass in InspectDevelopment rather than during porcelain
+	// parsing, since only a caller that already asked for full Development
+	// detail (not the lighter Summary) needs it.
+	//
+	// This exists because Git's own status categories (staged/unstaged/state)
+	// are coarse: two edits to the same file, made seconds apart, both land
+	// as "modified, unstaged" with no way to tell them apart from status
+	// alone. A consumer fingerprinting "has this exact file changed since I
+	// last looked" — see the Control API's Repository Actions plan staleness
+	// check — needs something finer-grained than the status category.
+	Size       int64
+	ModifiedAt string // RFC3339Nano; "" when unavailable
 }
 
 type Commit struct {
@@ -208,12 +224,33 @@ func InspectDevelopment(ctx context.Context, dir string) (Development, error) {
 		result.Repository.ErrorCode = "inspection_failed"
 		return result, nil
 	}
+	populateWorkingTreeStat(dir, result.Files)
 	result.RecentCommits = recentCommits(ctx, dir)
 	result.Remote = origin(ctx, dir, result.Head.Unborn)
 	if result.Remote != nil && result.Remote.Host == "github.com" {
 		result.GitHub = GitHub{Detected: true, Configured: false, Status: "not_configured"}
 	}
 	return result, nil
+}
+
+// populateWorkingTreeStat fills Size/ModifiedAt for each already-parsed
+// changed file by lstat-ing its working-tree path. Best-effort: a file that
+// no longer exists (deleted, or a race with a concurrent change) simply keeps
+// the zero values rather than failing the whole inspection. A symlink is
+// stat-ed, not followed — its target's size is irrelevant to "did this path
+// change", and following it could escape the repository.
+func populateWorkingTreeStat(dir string, files []ChangedFile) {
+	for i := range files {
+		if files[i].State == "deleted" {
+			continue
+		}
+		info, err := os.Lstat(filepath.Join(dir, files[i].Path))
+		if err != nil {
+			continue
+		}
+		files[i].Size = info.Size()
+		files[i].ModifiedAt = info.ModTime().UTC().Format(time.RFC3339Nano)
+	}
 }
 
 func failedDevelopment() Development {
@@ -775,9 +812,20 @@ func gitCommand(ctx context.Context, dir string, args ...string) (*exec.Cmd, err
 	// All invocations receive the same safety globals. In particular the
 	// command-line core.fsmonitor override prevents repository-local config
 	// from spawning an arbitrary fsmonitor hook during status inspection.
+	//
+	// safe.directory=dir is scoped to this exact, already-validated directory
+	// via -c (not a persisted, wildcarded global config): dir is always the
+	// absolute Canonical path projectpath.Validate produced, so this cannot be
+	// used to bless an arbitrary path. It exists because the runner's uid
+	// (project-runner) differs from the filesystem owner of every registered
+	// project by design, and git >= 2.35.2 refuses to read a repository whose
+	// directory it does not own ("detected dubious ownership") unless the
+	// directory is explicitly marked safe. Without this, every invocation in
+	// this file fails closed on a correctly configured host.
 	finalArgs := []string{
 		"--no-pager",
 		"--no-optional-locks",
+		"-c", "safe.directory=" + dir,
 		"-c", "core.fsmonitor=false",
 		"-c", "core.hooksPath=/dev/null",
 		"-C", dir,

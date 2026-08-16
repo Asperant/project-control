@@ -266,8 +266,15 @@ export async function getProjectDevelopment(
       : { clean: null, stagedCount: 0, unstagedCount: 0, untrackedCount: 0, conflictedCount: 0, totalChangedCount: 0 },
     files: available
       ? source.git.files.map((file) => ({
-          ...file,
+          // Picked explicitly rather than spread: RunnerGitDevelopment's
+          // files also carry size/modifiedAt (internal, for Repository
+          // Actions fingerprinting only — see runner/project-schemas.ts).
+          // developmentStateResponseSchema's file shape is `.strict()`, so
+          // forwarding those extra keys would fail this response's own
+          // validation rather than silently leaking them.
+          path: file.path, oldPath: file.oldPath,
           state: file.state === 'conflicted' ? 'unmerged' as const : file.state,
+          staged: file.staged, unstaged: file.unstaged, untracked: file.untracked,
         }))
       : [],
     filesTruncated: available ? source.git.workingTree.filesTruncated : false,

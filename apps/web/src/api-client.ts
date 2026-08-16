@@ -35,6 +35,8 @@ import {
   duplicateAgentRunResponseSchema,
   resumeProjectResponseSchema,
   developmentStateResponseSchema,
+  repositoryActionResponseSchema,
+  repositoryActionListResponseSchema,
   workSessionAmendmentResponseSchema,
   workSessionListResponseSchema,
   workSessionResponseSchema,
@@ -49,6 +51,10 @@ import {
   type DuplicateAgentRunResponse,
   type ResumeProjectResponse,
   type DevelopmentStateResponse,
+  type RepositoryActionResponse,
+  type RepositoryActionListResponse,
+  type PlanGitCommitRequest,
+  type ExecuteRepositoryActionRequest,
   type WorkSessionAmendmentResponse,
   type WorkSessionListResponse,
   type WorkSessionListQuery,
@@ -450,6 +456,14 @@ export const api = {
 
   // --- Resume / Work Sessions ---------------------------------------------------
   getProjectDevelopment(projectId:string,signal?:AbortSignal):Promise<DevelopmentStateResponse>{return request(`/api/projects/${projectId}/development`,developmentStateResponseSchema,signal?{signal}:{});},
+
+  // --- Repository Actions --------------------------------------------------------
+  listRepositoryActions(projectId:string,page=1,pageSize=20,signal?:AbortSignal):Promise<RepositoryActionListResponse>{return request(`/api/projects/${projectId}/actions?page=${page}&pageSize=${pageSize}`,repositoryActionListResponseSchema,signal?{signal}:{});},
+  getRepositoryAction(projectId:string,actionId:string,signal?:AbortSignal):Promise<RepositoryActionResponse>{return request(`/api/projects/${projectId}/actions/${actionId}`,repositoryActionResponseSchema,signal?{signal}:{});},
+  planGitCommit(projectId:string,body:PlanGitCommitRequest):Promise<RepositoryActionResponse>{return request(`/api/projects/${projectId}/actions/git-commit/plan`,repositoryActionResponseSchema,{method:'POST',body});},
+  executeRepositoryAction(projectId:string,actionId:string,body:ExecuteRepositoryActionRequest):Promise<RepositoryActionResponse>{return request(`/api/projects/${projectId}/actions/${actionId}/execute`,repositoryActionResponseSchema,{method:'POST',body});},
+  cancelRepositoryAction(projectId:string,actionId:string):Promise<RepositoryActionResponse>{return request(`/api/projects/${projectId}/actions/${actionId}/cancel`,repositoryActionResponseSchema,{method:'POST'});},
+  reconcileRepositoryAction(projectId:string,actionId:string):Promise<RepositoryActionResponse>{return request(`/api/projects/${projectId}/actions/${actionId}/reconcile`,repositoryActionResponseSchema,{method:'POST'});},
   getProjectResume(projectId:string,signal?:AbortSignal):Promise<ResumeProjectResponse>{return request(`/api/projects/${projectId}/resume`,resumeProjectResponseSchema,signal?{signal}:{});},
   listWorkSessions(projectId:string,query:Partial<WorkSessionListQuery> = {},signal?:AbortSignal):Promise<WorkSessionListResponse>{
     const params=new URLSearchParams();

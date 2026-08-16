@@ -34,6 +34,23 @@ grants. Suitable for a cron-driven monitor via `--json`.
 
 ---
 
+## Repository Actions
+
+Commits from the panel (Development → Actions) are disabled for every project
+until explicitly opted in — see [repository-actions.md](repository-actions.md).
+
+```bash
+sudo ./pcctl enable-repo-writes /home/asrin/Desktop/my-project
+sudo ./pcctl disable-repo-writes /home/asrin/Desktop/my-project
+```
+
+Both are idempotent and re-verify their own effect (POSIX ACL grant, systemd
+`.git`-scoped bind mount, runner restart) against the runner's live mount
+namespace before reporting success. Run `sudo ./pcctl verify-security`
+afterwards to confirm the full posture (`RNR-014`–`RNR-017`).
+
+---
+
 ## Understanding the status dashboard
 
 | Status | Meaning |

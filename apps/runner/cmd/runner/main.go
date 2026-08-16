@@ -1,24 +1,35 @@
 // Command runner is the Project Control host runner.
 //
 // It is a small, long-lived systemd service that exposes a fixed set of
-// diagnostic operations to the Control API over a Unix domain socket.
+// operations — almost all diagnostic and read-only — to the Control API over
+// a Unix domain socket.
 //
 // Security posture — all of these are enforced, not merely intended:
 //
 //   - Runs as the unprivileged `project-runner` user. It refuses to start as
 //     root.
 //   - Listens on a Unix socket only. There is no TCP listener anywhere in the
-//     binary, so it cannot be reached from the network even by mistake.
+//     binary, so it cannot be reached from the network even by mistake, and
+//     the systemd unit additionally restricts it to AF_UNIX at the kernel
+//     level — the runner cannot open an outbound connection either.
 //   - Access is granted by group ownership of the socket (0660, group
 //     project-control), which is the only credential involved.
 //   - Executes no caller-supplied command, ever — there is no shell, no
 //     script interpreter, and no code path that turns caller input into an
-//     argv. Operations are compiled in. The one narrow exception is the `git`
-//     binary, invoked by the project-registration operations with a fixed,
-//     hardcoded argv per subcommand and only against a directory that has
-//     already been validated by internal/projectpath; see internal/gitinfo's
-//     package doc for the full guardrail list and the rationale for this
-//     being safer than a from-scratch reimplementation of `git status`.
+//     argv. Operations are compiled in. The one exception is the `git`
+//     binary, invoked with a fixed, hardcoded argv per subcommand and only
+//     against a directory that has already been validated by
+//     internal/projectpath; see internal/gitinfo's package doc (reads) and
+//     internal/gitwrite's package doc (the one write, project.git.commit) for
+//     the full guardrail list.
+//   - project.git.commit — the only operation that writes anything outside
+//     the runner's own working directory — additionally requires the exact
+//     project directory to appear on a second, separate, root-owned allowlist
+//     (config/write-enabled-projects.conf) that is empty by default. Every
+//     other project stays exactly as read-only as before this operation
+//     existed, and the filesystem confinement enforced by the systemd unit
+//     keeps even a write-enabled project's working tree read-only — only its
+//     `.git` directory is ever writable.
 //   - Every operation has a timeout, an output cap and a concurrency slot.
 //   - No dependency outside the Go standard library.
 package main
@@ -59,6 +70,9 @@ func run() error {
 		allowedRootsFile = flag.String("allowed-project-roots-file",
 			envOr("PC_RUNNER_ALLOWED_PROJECT_ROOTS_FILE", "/srv/project-control/config/allowed-project-roots.conf"),
 			"root-owned file listing allowed project roots, one absolute path per line")
+		writeEnabledFile = flag.String("write-enabled-projects-file",
+			envOr("PC_RUNNER_WRITE_ENABLED_PROJECTS_FILE", "/srv/project-control/config/write-enabled-projects.conf"),
+			"root-owned, opt-in file listing exact project directories project.git.commit may write to, one absolute path per line (empty/missing means no project is write-enabled)")
 		maxConc     = flag.Int("max-concurrent", envOrInt("PC_RUNNER_MAX_CONCURRENT", 4), "maximum concurrent operations")
 		maxOutput   = flag.Int("max-output-runes", envOrInt("PC_RUNNER_MAX_OUTPUT", 8192), "maximum characters per output string")
 		logLevel    = flag.String("log-level", envOr("PC_RUNNER_LOG_LEVEL", "info"), "log level: debug|info|warn|error")
@@ -114,12 +128,26 @@ func run() error {
 		allowedRoots = nil
 	}
 
+	// --- Write-enabled projects -------------------------------------------------
+	// Same non-fatal treatment as allowed roots, with a different safe default:
+	// a missing or unreadable file means zero write-enabled projects rather
+	// than the runner refusing to start, and project.git.commit degrades to a
+	// clear "write_not_enabled" result for every project until an operator
+	// deliberately opts one in (see docs/repository-actions.md).
+	writeEnabledProjects, writeEnabledErr := projectpath.LoadWriteEnabledProjects(*writeEnabledFile)
+	if writeEnabledErr != nil {
+		logger.Warn("write-enabled projects not loaded; project.git.commit is disabled for every project until this is fixed",
+			"file", *writeEnabledFile, "error", writeEnabledErr.Error())
+		writeEnabledProjects = nil
+	}
+
 	reg, err := registry.New(operations.All(operations.Config{
-		WorkingDir:          resolvedWorkingDir,
-		SocketPath:          *socketPath,
-		Version:             version,
-		StartedAt:           time.Now(),
-		AllowedProjectRoots: allowedRoots,
+		WorkingDir:           resolvedWorkingDir,
+		SocketPath:           *socketPath,
+		Version:              version,
+		StartedAt:            time.Now(),
+		AllowedProjectRoots:  allowedRoots,
+		WriteEnabledProjects: writeEnabledProjects,
 	})...)
 	if err != nil {
 		return fmt.Errorf("cannot build operation registry: %w", err)
@@ -129,6 +157,7 @@ func run() error {
 		logger.Info("configuration valid",
 			"socket", *socketPath,
 			"allowedProjectRoots", len(allowedRoots),
+			"writeEnabledProjects", len(writeEnabledProjects),
 			"socketGid", gid,
 			"workingDir", resolvedWorkingDir,
 			"operations", reg.Names())

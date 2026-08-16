@@ -22,14 +22,14 @@ function state(overrides: Partial<DevelopmentStateResponse> = {}): DevelopmentSt
   };
 }
 
-function render(value: DevelopmentStateResponse, archived = false): string {
-  return renderToStaticMarkup(<DevelopmentView projectId={projectId} archived={archived} onSessionExpired={() => undefined} initialData={value} />);
+function render(value: DevelopmentStateResponse, archived = false, canWrite = false): string {
+  return renderToStaticMarkup(<DevelopmentView projectId={projectId} archived={archived} canWrite={canWrite} onSessionExpired={() => undefined} initialData={value} />);
 }
 
 describe('Development presentation', () => {
   it('renders all read-only metadata sections and backend comparison facts', () => {
     const html = render(state());
-    expect(Array.from(html.matchAll(/<h3>(\d+)\./g), (match) => Number(match[1]))).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(Array.from(html.matchAll(/<h3>(\d+)\./g), (match) => Number(match[1]))).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(html).toContain('src/long file.ts');
     expect(html).toContain('locally stored ref; may be stale');
     expect(html).toContain('Working tree state changed.');

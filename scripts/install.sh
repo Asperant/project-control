@@ -255,6 +255,34 @@ fi
 
 mapfile -t ALLOWED_ROOTS_RAW < <(grep -vE '^[[:space:]]*(#|$)' "$ALLOWED_ROOTS_FILE" || true)
 
+# --- write-enabled-projects.conf -----------------------------------------------
+# Opt-in, empty-by-default list of exact project directories project.git.commit
+# (Repository Actions) may write to. Never populated by this script — the only
+# way an entry is ever added is `sudo ./pcctl enable-repo-writes <path>`, which
+# also grants the matching ACL and regenerates the .git-scoped systemd drop-in
+# alongside it. Bootstrapped here only so the file, its permissions and the
+# runner.env reference to it exist from a project's very first install.
+WRITE_ENABLED_FILE="${PC_ROOT}/config/write-enabled-projects.conf"
+if [[ ! -f "$WRITE_ENABLED_FILE" ]]; then
+  tmp_write="$(mktemp)"
+  cat >"$tmp_write" <<'EOF'
+# Write-enabled project directories — one absolute path per line.
+# Root-owned (0644). Empty by default: no project accepts a commit until an
+# operator explicitly opts it in with:
+#   sudo ./pcctl enable-repo-writes <path>
+# Never edit this file directly — enable-repo-writes/disable-repo-writes also
+# manage a matching POSIX ACL grant and a systemd drop-in that must stay in
+# sync with it.
+EOF
+  install -m 0644 -o root -g root "$tmp_write" "$WRITE_ENABLED_FILE"
+  rm -f "$tmp_write"
+  log_ok "created ${WRITE_ENABLED_FILE} (empty; no project is write-enabled)"
+else
+  chmod 0644 "$WRITE_ENABLED_FILE"
+  chown root:root "$WRITE_ENABLED_FILE"
+  log_debug "write-enabled-projects.conf already present; preserved unchanged"
+fi
+
 # Validate and canonicalize each configured line before it ever reaches the
 # generated systemd drop-in: a malformed entry (not absolute, containing a
 # literal ".." component) is rejected with a visible warning rather than
@@ -335,6 +363,7 @@ PC_CONTROL_GID=${PC_CONTROL_GID}
 PC_RUNNER_SOCKET=${PC_RUNNER_SOCKET}
 PC_RUNNER_WORKING_DIR=${PC_ROOT}/runner
 PC_RUNNER_ALLOWED_PROJECT_ROOTS_FILE=${ALLOWED_ROOTS_FILE}
+PC_RUNNER_WRITE_ENABLED_PROJECTS_FILE=${WRITE_ENABLED_FILE}
 PC_RUNNER_MAX_CONCURRENT=4
 PC_RUNNER_LOG_LEVEL=info
 EOF
@@ -517,7 +546,28 @@ fi
 log_step "9/9  Post-install checks"
 # -----------------------------------------------------------------------------
 if ! (( SKIP_START )); then
-  bash "${PC_SCRIPTS_DIR}/verify.sh" || log_warn "verification reported issues; see output above"
+  # Docker's own Healthy status (compose up --wait, above) proves each
+  # container process is alive; it does not prove Caddy's reverse-proxy
+  # upstream connection to control-api is ready yet. Calling verify.sh the
+  # instant "healthy" is reported can observe a transient HTTP 503 on every
+  # API check it makes (API-002..API-013) purely because of that startup
+  # race, not because anything is actually broken — verify.sh is a strict,
+  # single-shot, point-in-time verifier by design (it does not and must not
+  # retry), so that race is this script's responsibility to close before
+  # calling it, not verify.sh's to paper over.
+  #
+  # wait_for_api_route (lib/common.sh) is the same bounded readiness gate
+  # update.sh and rollback.sh already use for exactly this: it retries the
+  # specific "still starting" signatures (503, connection refused) within a
+  # deadline, and treats anything else — including an unexpected 200/500 —
+  # as a real, immediate failure rather than something to retry away.
+  if wait_for_api_route "http://127.0.0.1:8780/api/auth/me" 401; then
+    bash "${PC_SCRIPTS_DIR}/verify.sh" || log_warn "verification reported issues; see output above"
+  else
+    log_error "the API did not become ready after the stack reported healthy; installation cannot be verified"
+    log_info  "inspect: ./pcctl logs control-api  and  ./pcctl logs caddy"
+    exit 1
+  fi
 fi
 
 cat >&2 <<BANNER

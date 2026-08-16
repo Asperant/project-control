@@ -27,6 +27,17 @@ effects. Closed rows remain immutable; corrections are separate, append-only
 `work_session_amendments` rows. See
 [work-sessions-resume.md](work-sessions-resume.md).
 
+## Repository Actions domain
+
+The platform's first write path into a project's own repository: plan →
+confirm+execute → verify → settle, one `project_actions` row per action,
+immutable once settled and never physically deleted. `git.commit` is the
+only action kind. The Control API builds and fingerprints a plan from a
+fresh runner read, and the runner (`project.git.commit`) performs the one
+write — scoped to a project's `.git` directory only, and only when that
+project is on a separate, empty-by-default, root-managed write-enabled list.
+See [repository-actions.md](repository-actions.md).
+
 ## Overview
 
 ```
@@ -145,24 +156,35 @@ Design constraints, all enforced rather than documented-only:
 Stage 1 operations: `system.health`, `runner.selftest`. Both read-only.
 
 Project-registration operations: `project.path.validate`, `project.inspect`,
-`project.git.summary`, `project.git.development`. All read-only, and all gated by the same
-`internal/projectpath` check — a caller-supplied path is only ever resolved
-against a fixed, root-owned list of allowed roots (see
-`config/allowed-project-roots.conf` and the systemd drop-in below), never
-against caller-supplied roots.
+`project.git.summary`, `project.git.development`, `project.git.write.status`.
+All read-only, and all gated by the same `internal/projectpath` check — a
+caller-supplied path is only ever resolved against a fixed, root-owned list
+of allowed roots (see `config/allowed-project-roots.conf` and the systemd
+drop-in below), never against caller-supplied roots.
 
 **The one exception to "no execution path" is `git`**, invoked by
-`project.inspect`/`project.git.summary`/`project.git.development` with a fixed, hardcoded argv per
-subcommand and only against a directory `internal/projectpath` has already
-validated. `internal/gitinfo`'s package doc explains why this is the safer
-choice over a from-scratch reimplementation of `git status` (which would mean
-parsing the binary index format and replicating gitignore semantics — real
-parsing of a complex on-disk format, with a wrong reimplementation silently
-misreporting a project's state). `GIT_OPTIONAL_LOCKS=0` plus
-`--no-optional-locks` guarantee the invocation never writes to `.git/index`;
-only read-only, non-hook-invoking subcommands are used
-(`rev-parse`, `symbolic-ref`, `show-ref`, `config --get-regexp`, `log`,
-`status`) — never fetch, pull, checkout, commit or merge.
+`project.inspect`/`project.git.summary`/`project.git.development`/
+`project.git.write.status` with a fixed, hardcoded argv per subcommand and
+only against a directory `internal/projectpath` has already validated.
+`internal/gitinfo`'s package doc explains why this is the safer choice over a
+from-scratch reimplementation of `git status` (which would mean parsing the
+binary index format and replicating gitignore semantics — real parsing of a
+complex on-disk format, with a wrong reimplementation silently misreporting a
+project's state). `GIT_OPTIONAL_LOCKS=0` plus `--no-optional-locks` guarantee
+the invocation never writes to `.git/index`; only read-only, non-hook-invoking
+subcommands are used (`rev-parse`, `symbolic-ref`, `show-ref`,
+`config --get-regexp`, `log`, `status`) — never fetch, pull, checkout, commit
+or merge.
+
+**`project.git.commit` is the runner's one mutating operation** — see
+[repository-actions.md](repository-actions.md) and
+`internal/gitwrite`'s package doc, kept in a separate package from the
+read-only `internal/gitinfo` so "gitinfo never writes" stays true by
+construction. It is reachable only for a project on the separate, empty-by-
+default write-enabled list (`internal/projectpath.ValidateWritable`), never
+touches the working tree (only `.git`, via plumbing against a throwaway
+index), never runs a hook, and CAS-guards the one ref update it performs
+against an operator-observed HEAD.
 
 **Allowed roots and the systemd drop-in.** The runner reads
 `config/allowed-project-roots.conf` — a root-owned, non-secret, newline-
@@ -294,6 +316,14 @@ cross-project checkpoint links. Lifecycle and mutation triggers protect open
 field rules, closed history and closed-parent-only amendments; grants deny
 physical deletion and make amendments append-only for `control_app` while
 `backup_reader` remains SELECT-only.
+
+Repository Actions table (migrations `0013`/`0014`): `project_actions`. A
+partial unique index permits at most one `planned`/`running` row per project.
+A lifecycle trigger enforces the fixed status transition graph and freezes a
+row once it reaches a terminal status (`succeeded`, `failed`, `cancelled`,
+`expired`); grants deny physical deletion for `control_app`, and
+`backup_reader` remains SELECT-only. See
+[repository-actions.md](repository-actions.md).
 
 Development State adds no table or migration. Live Git metadata is not cached
 in PostgreSQL; only compact Git state is persisted inside new immutable

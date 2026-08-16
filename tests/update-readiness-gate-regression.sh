@@ -20,6 +20,16 @@
 # Part 3 exercises the real update.sh::rollback_or_require_restore() (pulled
 # verbatim out of the live script, not retyped) to prove the migration-safety
 # gating around automatic rollback is unchanged by this fix.
+#
+# Part 4 covers the same startup race in install.sh, live-reported as a
+# transient 503 on API-002..API-013 immediately after `compose up --wait`
+# reported the stack healthy: the exact post-install-checks block is
+# extracted out of install.sh (not retyped) and exercised against a fake
+# curl, proving (a) verify.sh only ever runs once the anonymous API boundary
+# actually answers 401, (b) a persistent-503/unexpected-response readiness
+# failure makes install.sh exit non-zero *before* it would ever print the
+# "installation complete" banner, and (c) verify.sh itself is untouched —
+# still a strict, non-retrying, point-in-time verifier.
 # =============================================================================
 set -Eeuo pipefail
 IFS=$'\n\t'
@@ -385,4 +395,147 @@ grep -q 'rollback_or_require_restore health_gate || true' "${REPO_ROOT}/scripts/
 grep -q 'wait_for_api_route "http://127.0.0.1:8780/api/auth/me" 401' "${REPO_ROOT}/scripts/update.sh" \
   || fail "update.sh's health gate no longer calls the bounded readiness helper"
 
-printf 'PASS: update/rollback readiness-gate regression (12 assertions across 3 parts)\n'
+# =============================================================================
+# Part 4 — install.sh waits for API route readiness before invoking verify.sh,
+#          and a persistent readiness failure fails install.sh outright —
+#          the "installation complete" banner must never be reached.
+# =============================================================================
+INST="${SCRATCH}/install-env"
+mkdir -p "${INST}/bin" "${INST}/scripts"
+
+# Extract the exact post-install-checks block out of install.sh (never
+# retyped) — from its log_step header through the matching `fi`, strictly
+# before the success-banner heredoc begins.
+inst_start_line="$(grep -n 'log_step "9/9  Post-install checks"' "${REPO_ROOT}/scripts/install.sh" | head -1 | cut -d: -f1)"
+inst_banner_line="$(grep -n 'cat >&2 <<BANNER' "${REPO_ROOT}/scripts/install.sh" | head -1 | cut -d: -f1)"
+[[ -n "$inst_start_line" && -n "$inst_banner_line" && "$inst_start_line" -lt "$inst_banner_line" ]] \
+  || fail "could not locate install.sh's post-install-checks block — has its shape changed?"
+sed -n "${inst_start_line},$(( inst_banner_line - 1 ))p" "${REPO_ROOT}/scripts/install.sh" > "${INST}/post-install-checks.sh"
+grep -q 'wait_for_api_route "http://127.0.0.1:8780/api/auth/me" 401' "${INST}/post-install-checks.sh" \
+  || fail "extracted install.sh block does not call the bounded readiness helper — extraction range is wrong"
+grep -q 'bash "${PC_SCRIPTS_DIR}/verify.sh"' "${INST}/post-install-checks.sh" \
+  || fail "extracted install.sh block does not invoke verify.sh — extraction range is wrong"
+
+VERIFY_CALLS="${INST}/verify-calls"
+cat > "${INST}/scripts/verify.sh" <<EOF
+#!/usr/bin/env bash
+date +%s%N >>"${VERIFY_CALLS}"
+exit 0
+EOF
+chmod +x "${INST}/scripts/verify.sh"
+
+cat > "${INST}/harness.sh" <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+source "${REPO_ROOT}/scripts/lib/common.sh"
+
+# wait_for_api_route's own retry/bounding behaviour is already proven
+# exhaustively in Part 1 above (including a real, elapsed-time-checked
+# persistent-failure timeout). Wrapping it here — after first asserting the
+# call site passes exactly the URL and expected code install.sh must use —
+# lets this harness force a short timeout for a fast "persistent 503"
+# scenario without waiting out the real 90s default, while still running
+# the genuine retry engine underneath (renamed, not reimplemented).
+eval "\$(declare -f wait_for_api_route | sed '1s/wait_for_api_route/_real_wait_for_api_route/')"
+wait_for_api_route() {
+  local url="\$1" expected="\$2"
+  [[ "\$url" == "http://127.0.0.1:8780/api/auth/me" ]] || { log_error "unexpected readiness URL: \${url}"; return 1; }
+  [[ "\$expected" == "401" ]] || { log_error "unexpected readiness expected-code: \${expected}"; return 1; }
+  _real_wait_for_api_route "\$url" "\$expected" "\${TEST_READINESS_TIMEOUT:-10}" "\${TEST_READINESS_INTERVAL:-0.2}"
+}
+
+SKIP_START=0
+PC_SCRIPTS_DIR="${INST}/scripts"
+source "${INST}/post-install-checks.sh"
+echo BANNER_REACHED >>"${INST}/banner-marker"
+EOF
+chmod +x "${INST}/harness.sh"
+
+# run_install <name> <queue codes...> -> populates INSTALL_EXIT
+run_install() {
+  local name="$1"; shift
+  local dir="${INST}/${name}"
+  mkdir -p "$dir"
+  rm -f "${INST}/banner-marker" "$VERIFY_CALLS"
+  printf '%s\n' "$@" >"${dir}/queue"
+  if (
+    export PATH="${FAKE_BIN}:${PATH}"
+    export FAKE_CURL_QUEUE_FILE="${dir}/queue"
+    export FAKE_CURL_COUNTER_FILE="${dir}/counter"
+    bash "${INST}/harness.sh"
+  ) >"${dir}/stdout" 2>"${dir}/stderr"; then
+    INSTALL_EXIT=0
+  else
+    INSTALL_EXIT=1
+  fi
+}
+
+# --- 1. 503 -> 503 -> 401 => install verification proceeds -----------------
+run_install "i1-transient-503" 503 503 401
+[[ "$INSTALL_EXIT" == "0" ]] || { cat "${INST}/i1-transient-503/stderr" >&2; fail "install scenario 1: expected success, got exit ${INSTALL_EXIT}"; }
+[[ -f "$VERIFY_CALLS" ]] || fail "install scenario 1: verify.sh was never invoked"
+[[ "$(wc -l <"$VERIFY_CALLS")" == "1" ]] || fail "install scenario 1: verify.sh should run exactly once"
+[[ -f "${INST}/banner-marker" ]] || fail "install scenario 1: execution never reached the banner"
+printf 'PASS: install scenario 1 (503, 503, 401 -> verify.sh runs, banner reached)\n'
+
+# --- 2. persistent 503 => install fails, verify.sh never runs, no banner ---
+run_install "i2-persistent-503" 503
+[[ "$INSTALL_EXIT" == "1" ]] || fail "install scenario 2: expected failure, got exit ${INSTALL_EXIT}"
+[[ ! -f "$VERIFY_CALLS" ]] || fail "install scenario 2: verify.sh must not run when readiness never succeeds"
+[[ ! -f "${INST}/banner-marker" ]] || fail "install scenario 2: the installation-complete banner must never be reached on a readiness timeout"
+grep -q 'did not become ready' "${INST}/i2-persistent-503/stderr" \
+  || fail "install scenario 2: expected a readiness-timeout error message"
+grep -q 'installation cannot be verified' "${INST}/i2-persistent-503/stderr" \
+  || fail "install scenario 2: expected install.sh's own readiness-failure message"
+printf 'PASS: install scenario 2 (persistent 503 -> install fails, verify.sh never runs, banner never reached)\n'
+
+# --- 3. 401 on the first try => install proceeds immediately ---------------
+run_install "i3-first-try-401" 401
+[[ "$INSTALL_EXIT" == "0" ]] || fail "install scenario 3: expected success, got exit ${INSTALL_EXIT}"
+[[ -f "$VERIFY_CALLS" ]] || fail "install scenario 3: verify.sh was never invoked"
+[[ -f "${INST}/banner-marker" ]] || fail "install scenario 3: execution never reached the banner"
+attempts="$(cat "${INST}/i3-first-try-401/counter" 2>/dev/null || echo 0)"
+[[ "$attempts" == "1" ]] || fail "install scenario 3: expected exactly 1 readiness attempt, got ${attempts}"
+printf 'PASS: install scenario 3 (401 on the first attempt -> install proceeds immediately)\n'
+
+# --- 4. unexpected 200 => fails immediately, no banner ---------------------
+run_install "i4-unexpected-200" 200
+[[ "$INSTALL_EXIT" == "1" ]] || fail "install scenario 4a: expected failure on an unexpected 200, got exit ${INSTALL_EXIT}"
+[[ ! -f "$VERIFY_CALLS" ]] || fail "install scenario 4a: verify.sh must not run after an unexpected 200"
+[[ ! -f "${INST}/banner-marker" ]] || fail "install scenario 4a: the banner must never be reached after an unexpected 200"
+attempts="$(cat "${INST}/i4-unexpected-200/counter" 2>/dev/null || echo 0)"
+[[ "$attempts" == "1" ]] || fail "install scenario 4a: an unexpected 200 must not be retried, got ${attempts} attempts"
+printf 'PASS: install scenario 4a (unexpected HTTP 200 -> install fails immediately, no retry, no banner)\n'
+
+# --- 4b. unexpected 500 => fails immediately, no banner (not confused with 503) --
+run_install "i4b-unexpected-500" 500
+[[ "$INSTALL_EXIT" == "1" ]] || fail "install scenario 4b: expected failure on a persistent non-503 5xx, got exit ${INSTALL_EXIT}"
+[[ ! -f "$VERIFY_CALLS" ]] || fail "install scenario 4b: verify.sh must not run after an unexpected 500"
+[[ ! -f "${INST}/banner-marker" ]] || fail "install scenario 4b: the banner must never be reached after an unexpected 500"
+attempts="$(cat "${INST}/i4b-unexpected-500/counter" 2>/dev/null || echo 0)"
+[[ "$attempts" == "1" ]] || fail "install scenario 4b: an unexpected 500 must not be retried, got ${attempts} attempts"
+printf 'PASS: install scenario 4b (unexpected HTTP 500 -> install fails immediately, no retry, no banner)\n'
+
+# --- Sanity: install.sh's SKIP_START path is unaffected, and verify.sh/
+#     verify-security.sh remain strict, single-shot, non-retrying verifiers.
+#     A plain `git diff` is not the right test here — this repository may
+#     carry legitimate, unrelated uncommitted work at any time (per policy,
+#     nothing in this session is committed) — so this checks content/shape
+#     instead: neither file may call the bounded retry helper (that would
+#     mean readiness-waiting leaked into the verifier itself, which is
+#     exactly what requirement 4 forbids), and the API-002 check in
+#     verify.sh — the one this whole fix is about — still performs exactly
+#     one curl call with no surrounding retry loop.
+grep -q 'if (( SKIP_START ))' "${REPO_ROOT}/scripts/install.sh" \
+  || fail "install.sh's --skip-start handling appears to have changed shape"
+grep -q 'wait_for_api_route' "${REPO_ROOT}/scripts/verify.sh" \
+  && fail "verify.sh must not call wait_for_api_route — it must stay a strict, non-retrying, point-in-time verifier"
+grep -q 'wait_for_api_route' "${REPO_ROOT}/scripts/verify-security.sh" \
+  && fail "verify-security.sh must not call wait_for_api_route — it must stay a strict, non-retrying, point-in-time verifier"
+api002_block="$(awk '/PORTAL}\/api\/auth\/me"/,/record_check FAIL API-002/' "${REPO_ROOT}/scripts/verify.sh")"
+[[ -n "$api002_block" ]] || fail "could not locate verify.sh's API-002 check — has its shape changed?"
+printf '%s\n' "$api002_block" | grep -qE '\bwhile\b|\bsleep\b' \
+  && fail "verify.sh's API-002 check now contains a retry/sleep construct — it must remain single-shot"
+printf 'PASS: install scenario 5 (verify.sh/verify-security.sh remain strict, non-retrying, single-shot point-in-time verifiers)\n'
+
+printf 'PASS: update/rollback/install readiness-gate regression (18 assertions across 4 parts)\n'

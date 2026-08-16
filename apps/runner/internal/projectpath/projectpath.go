@@ -34,6 +34,7 @@ var (
 	ErrIsAllowedRootItself = errors.New("the allowed root itself cannot be registered as a project")
 	ErrOutsideAllowedRoot  = errors.New("path is not inside any allowed project root")
 	ErrNoAllowedRoots      = errors.New("no allowed project roots are configured")
+	ErrWriteNotEnabled     = errors.New("this project is not on the write-enabled list")
 )
 
 // LoadAllowedRoots reads one absolute directory path per line from path.
@@ -76,6 +77,64 @@ func LoadAllowedRoots(path string) ([]string, error) {
 		return nil, fmt.Errorf("allowed project roots file %s contains no entries", path)
 	}
 	return roots, nil
+}
+
+// LoadWriteEnabledProjects reads one absolute project directory path per line
+// from path — the opt-in list of projects on which a mutating operation may
+// ever be attempted. Format mirrors LoadAllowedRoots (blank lines and '#'
+// comments ignored, symlinks resolved, duplicates collapsed), with one
+// deliberate difference: an empty list is not an error. The safe, shipped
+// default is that no project is write-enabled, so a missing or empty file
+// must mean exactly that rather than fail runner start-up.
+func LoadWriteEnabledProjects(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("cannot read write-enabled projects file %s: %w", path, err)
+	}
+
+	seen := make(map[string]bool)
+	var projects []string
+
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if !filepath.IsAbs(line) {
+			return nil, fmt.Errorf("write-enabled project %q is not an absolute path", line)
+		}
+		canonical, evalErr := filepath.EvalSymlinks(line)
+		if evalErr != nil {
+			canonical = filepath.Clean(line)
+		}
+		if seen[canonical] {
+			continue
+		}
+		seen[canonical] = true
+		projects = append(projects, canonical)
+	}
+	return projects, nil
+}
+
+// ValidateWritable applies every Validate check and then additionally
+// requires that the resolved path is an exact entry (not merely a
+// descendant) of writeEnabled. Exact-match only, deliberately: a prefix match
+// here would let enabling writes for one project silently enable writes for
+// every directory nested under it.
+func ValidateWritable(allowedRoots, writeEnabled []string, rawInput string) (Result, error) {
+	result, err := Validate(allowedRoots, rawInput)
+	if err != nil {
+		return Result{}, err
+	}
+	for _, project := range writeEnabled {
+		if result.Canonical == project {
+			return result, nil
+		}
+	}
+	return Result{}, ErrWriteNotEnabled
 }
 
 // Validate resolves rawInput against allowedRoots.

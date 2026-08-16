@@ -21,6 +21,8 @@ export const runnerOperationSchema = z.enum([
   'project.inspect',
   'project.git.summary',
   'project.git.development',
+  'project.git.write.status',
+  'project.git.commit',
 ]);
 export type RunnerOperation = z.infer<typeof runnerOperationSchema>;
 

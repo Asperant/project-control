@@ -622,6 +622,27 @@ code {
 .development-commits li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.25rem 0.6rem; }
 .development-commits small { grid-column: 2; }
 
+/* --- Repository Actions ----------------------------------------------------- */
+.actions-panel { min-width: 0; }
+.actions-file-list { list-style: none; margin: 0.75rem 0; padding: 0; display: grid; gap: 0.4rem; max-height: 16rem; overflow-y: auto; }
+.actions-file-list li { min-width: 0; overflow-wrap: anywhere; }
+.actions-file-list label { display: flex; align-items: baseline; gap: 0.5rem; }
+.actions-select .field,
+.actions-preview .field { margin-top: 0.5rem; }
+.actions-buttons { display: flex; gap: 0.6rem; margin-top: 0.85rem; }
+.actions-preview h4,
+.actions-panel > h4 { margin: 1rem 0 0.35rem; font-size: 0.85rem; font-weight: 650; text-transform: uppercase; color: var(--text-muted); }
+.actions-history { list-style: none; margin: 0.5rem 0 0; padding: 0; display: grid; gap: 0.5rem; }
+.actions-history li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; font-size: 0.85rem; }
+.actions-history time { color: var(--text-muted); font-size: 0.78rem; margin-left: auto; }
+.actions-status { font-weight: 650; text-transform: capitalize; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.75rem; }
+.actions-status-succeeded { color: var(--ok); background: var(--ok-bg); }
+.actions-status-failed,
+.actions-status-expired { color: var(--down); background: var(--down-bg); }
+.actions-status-cancelled { color: var(--text-muted); background: transparent; }
+.actions-status-planned,
+.actions-status-running { color: var(--warn); background: var(--warn-bg); }
+
 /* --- Motion ---------------------------------------------------------------- */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

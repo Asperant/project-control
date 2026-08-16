@@ -61,6 +61,18 @@ export const runnerGitDevelopmentSchema = z.object({
     staged: z.boolean(),
     unstaged: z.boolean(),
     untracked: z.boolean(),
+    // Working-tree file size and modification time, internal to this
+    // schema only — never forwarded to the public developmentStateResponse.
+    // Exists solely so Repository Actions can fingerprint "has this exact
+    // file changed" more precisely than the coarse status category alone
+    // distinguishes (two edits to the same file can both read as "modified,
+    // unstaged"). See repository-actions/plan.ts.
+    size: z.number().int().nonnegative(),
+    // Deliberately a bare string, not a parsed/validated timestamp: this
+    // value is never displayed and never compared for ordering, only hashed
+    // verbatim as one input among several to a fingerprint. Constraining its
+    // format would add a runtime failure mode for zero benefit.
+    modifiedAt: z.string().nullable(),
   }).strict()).max(200),
   recentCommits: z.array(z.object({
     sha: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
@@ -161,3 +173,74 @@ export const runnerInspectResultSchema = z.union([
   }),
 ]);
 export type RunnerInspectResult = z.infer<typeof runnerInspectResultSchema>;
+
+/**
+ * Validators for the `project.git.write.status` and `project.git.commit`
+ * result payloads — the runner's write-capable operations. See
+ * apps/runner/internal/gitwrite's package doc for what backs these, and
+ * apps/runner/internal/operations/project_write_ops.go for the exact shapes
+ * parsed here.
+ */
+
+const gitWritePreflightSchema = z.object({
+  gitLayoutSupported: z.boolean(),
+  branch: z.string().nullable(),
+  detached: z.boolean(),
+  headSha: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/).nullable(),
+  unborn: z.boolean(),
+  mergeInProgress: z.boolean(),
+  unmergedPaths: z.boolean(),
+  identityConfigured: z.boolean(),
+}).strict();
+export type RunnerGitWritePreflight = z.infer<typeof gitWritePreflightSchema>;
+
+// A bounded, deterministic identity of one repository-relative path's
+// *current* working-tree content — never the content itself. See
+// apps/runner/internal/gitinfo/identity.go's package doc for the exact
+// algorithm (git's own blob object-id scheme) and every edge case
+// (symlink, absent, oversized) this represents.
+const pathIdentitySchema = z.object({
+  path: z.string(),
+  kind: z.enum(['file', 'symlink', 'absent', 'unsupported']),
+  contentHash: z.string().regex(/^[0-9a-f]{40}$/).nullable(),
+  mode: z.enum(['100644', '100755', '120000']).nullable(),
+  unsupportedReason: z.string().nullable(),
+  fallbackSize: z.number().int().nonnegative(),
+  fallbackModifiedAt: z.string().nullable(),
+}).strict();
+export type RunnerPathIdentity = z.infer<typeof pathIdentitySchema>;
+
+export const runnerGitWriteStatusResultSchema = z.union([
+  invalidPathResultSchema,
+  z.object({
+    valid: z.literal(true), canonicalPath: z.string(), allowedRoot: z.string(),
+    writable: z.literal(false), reason: z.string(),
+  }).strict(),
+  z.object({
+    valid: z.literal(true), canonicalPath: z.string(), allowedRoot: z.string(),
+    writable: z.literal(true), preflight: gitWritePreflightSchema, readyToCommit: z.string(),
+    pathIdentities: z.array(pathIdentitySchema).max(200).optional(),
+  }).strict(),
+]);
+export type RunnerGitWriteStatusResult = z.infer<typeof runnerGitWriteStatusResultSchema>;
+
+export const runnerGitCommitResultSchema = z.union([
+  invalidPathResultSchema,
+  z.object({
+    valid: z.literal(true), canonicalPath: z.string(), allowedRoot: z.string(),
+    committed: z.literal(false), reason: z.string(),
+  }).strict(),
+  z.object({
+    valid: z.literal(true), canonicalPath: z.string(), allowedRoot: z.string(),
+    committed: z.literal(true),
+    commit: z.object({
+      sha: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
+      shortSha: z.string().regex(/^[0-9a-f]{7,64}$/),
+      previousHeadSha: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/).nullable(),
+      branch: z.string().min(1),
+      fileCount: z.number().int().positive(),
+      indexReconciled: z.boolean(),
+    }).strict(),
+  }).strict(),
+]);
+export type RunnerGitCommitResult = z.infer<typeof runnerGitCommitResultSchema>;

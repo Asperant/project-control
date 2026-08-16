@@ -101,6 +101,52 @@
 - Status: mitigated; the fail-closed and no-mutation-on-failure paths are
   release gates.
 
+## Repository Actions: network-mutating Git operations are out of scope by design
+
+- Category: security / scope.
+- Detail: Repository Actions (`docs/repository-actions.md`) supports only
+  `git.commit`. `push`, `fetch` and `pull` were deliberately not built: the
+  runner's systemd unit sets `RestrictAddressFamilies=AF_UNIX` and
+  `IPAddressDeny=any`, so a network-mutating Git operation is structurally
+  impossible without first removing that confinement — and doing so would
+  also require a credential-delivery mechanism the runner has none of today
+  (`GIT_ASKPASS=`, `HOME=/nonexistent`, no SSH agent, no stored token) and a
+  remote-divergence (ahead/behind/diverged) decision model this version does
+  not implement.
+- Mitigation: this is a scope boundary, not a partial mitigation — there is
+  no code path attempting a network Git operation to fail unsafely. Any
+  future work here is a distinct design effort with its own threat model,
+  not an incremental extension of `git.commit`.
+- Status: accepted; watch for a future proposal to add push/fetch/pull.
+
+## Repository Actions: a write-enabled project's .git directory is host-writable
+
+- Category: security / host filesystem.
+- Impact: `sudo ./pcctl enable-repo-writes <path>` grants the runner's OS
+  user (`project-runner`) a POSIX ACL write grant on exactly one project's
+  `.git` directory, and the systemd unit gains a matching `BindPaths=`
+  exception scoped to that same path. This is the first host-filesystem
+  write grant this platform's runner has ever held; every prior operation
+  (project registration, Git reads, Development State) is read-only.
+- Mitigation: opt-in per project, off by default (empty
+  `config/write-enabled-projects.conf`); scoped to `.git` only — the working
+  tree stays read-only even for a write-enabled project, so `git.commit`
+  cannot alter source files directly, only construct a commit via plumbing
+  (`apps/runner/internal/gitwrite`); no hook execution
+  (`core.hooksPath=/dev/null`); protected-path denylist rejects committing
+  `.env`/key/credential-shaped files; every commit is compare-and-swapped
+  against an operator-observed HEAD (`ExpectedHead`) so a stale plan cannot
+  silently land; `verify-security` RNR-014–RNR-017 prove the ACL/mount/
+  runner-refusal properties functionally, not just by config inspection.
+- How to test: `apps/runner/internal/gitwrite`'s test suite (temp-index
+  isolation, hook non-execution, protected-path rejection, HEAD CAS),
+  `apps/control-api/test/integration/repository-actions.test.ts` (plan →
+  execute → verify, fingerprint staleness, concurrent-plan rejection,
+  archived-project block), and `sudo ./pcctl verify-security` on a host with
+  at least one project enabled.
+- Status: mitigated; the `.git`-only write scope and the CAS-protected commit
+  are release gates for this feature.
+
 ## Runner startup race creates a partial deployment or rollback
 
 - Category: release / availability / state consistency.

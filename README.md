@@ -153,6 +153,7 @@ upstream registry. No `latest`, no floating tag, no `^` or `~` in any manifest.
 | [project-registration.md](docs/project-registration.md) | Registering, inspecting, rescanning and archiving projects |
 | [manual-roadmap.md](docs/manual-roadmap.md) | Manual milestones, tasks, criteria, dependencies, notes and progress |
 | [project-memory.md](docs/project-memory.md) | Manual memory entries, supersede history, immutable checkpoints, "Where was I?" |
+| [repository-actions.md](docs/repository-actions.md) | Controlled, previewed repository commits: plan → confirm → execute → verify |
 | [installation.md](docs/installation.md) | Clean-machine install on Ubuntu 22.04 |
 | [manual-checkpoints.md](docs/manual-checkpoints.md) | The five steps that need a human |
 | [operations.md](docs/operations.md) | Daily operation, logs, secret rotation |

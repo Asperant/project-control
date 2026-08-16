@@ -1,15 +1,27 @@
 // Package operations implements the runner's operation handlers.
 //
-// Scope stays narrow by construction: every handler is read-only apart from
-// one temp file in the runner's own working directory (runner.selftest).
-// Nothing here spawns a process on caller-supplied input, opens a network
-// connection, or writes outside the runner's own working directory. The
-// project-registration operations (project.path.validate, project.inspect,
-// project.git.summary, project.git.development) read filesystem state under an
-// operator-configured allowed root and, for Git inspection, invoke `git` — but
-// always with a fixed argv and a caller-independent directory already validated by
-// internal/projectpath; see internal/gitinfo's package doc for the full
-// justification of that one exception to "the runner executes nothing".
+// Every handler here is read-only with two narrow, deliberate exceptions:
+// runner.selftest touches one temp file in the runner's own working
+// directory, and project.git.commit — the runner's only true mutation —
+// writes to a single repository's .git directory, and only when that exact
+// repository is on the operator-managed write-enabled list. Nothing here
+// spawns a process on caller-supplied input, opens a network connection, or
+// writes anywhere else.
+//
+// The project-registration operations (project.path.validate, project.inspect,
+// project.git.summary, project.git.development, project.git.write.status) read
+// filesystem state under an operator-configured allowed root and, for Git
+// inspection, invoke `git` — but always with a fixed argv and a
+// caller-independent directory already validated by internal/projectpath;
+// see internal/gitinfo's package doc for the full justification of that one
+// exception to "the runner executes nothing" for reads.
+//
+// project.git.commit is the same exception extended, carefully, to a write:
+// see internal/gitwrite's package doc for exactly what makes that one
+// mutating call safe. It never accepts a command, argv, script, working
+// directory or environment from the caller — only a branch name, an expected
+// HEAD, a commit message and a list of repository-relative paths, all
+// validated before a single git process is started.
 package operations
 
 import (
@@ -43,6 +55,14 @@ type Config struct {
 	// operation reports "no_allowed_roots_configured" rather than the runner
 	// refusing to start.
 	AllowedProjectRoots []string
+	// WriteEnabledProjects is the fixed, root-owned, opt-in list of exact
+	// project directories a mutating operation may ever touch. Loaded once at
+	// startup from a separate file, also unwritable by the web panel and
+	// Control API. Empty by default and on any read failure — the safe,
+	// shipped posture is that no project accepts a write, and enabling one
+	// is a deliberate host-level action (see docs/repository-actions.md),
+	// never something the application layer can turn on by itself.
+	WriteEnabledProjects []string
 }
 
 // All returns the complete operation set.
@@ -89,6 +109,37 @@ func All(cfg Config) []registry.Operation {
 			TimeoutSeconds: 20,
 			Params:         []registry.ParamSpec{{Name: "path", Type: "string", Required: true, MaxLength: 4096}},
 			Handler:        projectGitDevelopment(cfg),
+		},
+		{
+			Name: "project.git.write.status",
+			Description: "Reports whether a project is write-enabled and, if so, whether its current state meets every precondition for project.git.commit. " +
+				"When paths is given, also reports a bounded, deterministic content identity for exactly those repository-relative paths — never their content. Read-only.",
+			TimeoutSeconds: 15,
+			Params: []registry.ParamSpec{
+				{Name: "path", Type: "string", Required: true, MaxLength: 4096},
+				{Name: "paths", Type: "string[]", Required: false, MaxLength: 4096, MaxItems: 200},
+			},
+			Handler: projectGitWriteStatus(cfg),
+		},
+		{
+			Name:        "project.git.commit",
+			Description: "Commits an exact, caller-selected set of repository-relative paths to the current branch of a write-enabled project, compare-and-swapped against an expected HEAD. The runner's only mutating operation.",
+			// A commit involves several sequential git invocations (layout and
+			// precondition checks, tree/commit construction, the ref update,
+			// then a best-effort real-index reconciliation); 60s is generous
+			// headroom for a working tree of ordinary size, not an expected
+			// duration.
+			TimeoutSeconds: 60,
+			Params: []registry.ParamSpec{
+				{Name: "path", Type: "string", Required: true, MaxLength: 4096},
+				{Name: "branch", Type: "string", Required: true, MaxLength: 1024},
+				// ExpectedHead is a full SHA-1 (40) or SHA-256 (64) hex object id,
+				// or "" for a caller that believes the branch is still unborn.
+				{Name: "expectedHead", Type: "string", Required: true, MaxLength: 64},
+				{Name: "message", Type: "string", Required: true, MaxLength: 8192},
+				{Name: "paths", Type: "string[]", Required: true, MaxLength: 4096, MaxItems: 200},
+			},
+			Handler: projectGitCommit(cfg),
 		},
 	}
 }

@@ -331,6 +331,47 @@ log_step "PostgreSQL role isolation"
 if [[ -n "$(container_id postgres)" ]] && is_root; then
   pg_cid="$(container_id postgres)"
 
+  # run_psql_scalar <pg_user> <pg_password> <sql>
+  #
+  # Runs a scalar query (typically `SELECT count(*) ...`) inside the
+  # postgres container and prints its trimmed result on success. On any
+  # failure — a syntax error, a relation that does not yet exist because a
+  # migration has not been applied, a connectivity problem, anything —
+  # nothing is printed and the function returns non-zero.
+  #
+  # This exists because `var="$(docker exec ... psql ... | tr -d ...)"` as a
+  # bare assignment is not safe under this script's `set -Eeuo pipefail`: if
+  # the docker/psql command fails, pipefail propagates that failure to the
+  # whole pipeline, which trips the ERR trap and aborts the *entire*
+  # verify-security run — not just this one check — with a misleading
+  # message, since bash's $BASH_COMMAND at that point reports the trailing
+  # `tr` command's text rather than the command that actually failed. Every
+  # caller below uses this function specifically so a query failure becomes
+  # data (an explicit FAIL for that one check) rather than a script abort.
+  # See tests/verify-security-psql-scalar-regression.sh.
+  run_psql_scalar() {
+    local pg_user="$1" pg_password="$2" sql="$3" raw status
+    raw="$(docker exec -i "$pg_cid" env PGPASSWORD="$pg_password" \
+         psql -U "$pg_user" -d project_control -tAc "$sql" 2>/dev/null)" && status=0 || status=$?
+    if (( status != 0 )); then
+      return 1
+    fi
+    printf '%s' "$raw" | tr -d '[:space:]'
+    return 0
+  }
+
+  # _mutation_denied_by_privilege <captured-stderr>
+  #
+  # True only when a failed mutation failed for the specific reason a
+  # "must be refused by GRANTs" check exists to prove: PostgreSQL's own
+  # privilege system refused it (the standard "permission denied for ..."
+  # message). Any other failure — a missing relation, a connectivity
+  # problem, a syntax error — does not prove the privilege claim the check
+  # is making, and must not be silently treated as if it did.
+  _mutation_denied_by_privilege() {
+    grep -qi 'permission denied' <<<"$1"
+  }
+
   # Each of these must FAIL to connect. A success is the finding.
   assert_cannot_connect() {
     local role="$1" database="$2" secret="$3"
@@ -457,16 +498,18 @@ if [[ -n "$(container_id postgres)" ]] && is_root; then
   # behavior is proven by the integration test suite
   # (apps/control-api/test/integration/agent-runs.test.ts), which does
   # perform real inserts/updates against a disposable test database.
-  trigger_guard="$(docker exec -i "$pg_cid" env PGPASSWORD="$control_pw" \
-       psql -U control_app -d project_control -tAc \
+  if trigger_guard="$(run_psql_scalar control_app "$control_pw" \
        "SELECT count(*) FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid
           WHERE t.tgname IN ('agent_run_prompts_guard_immutable','agent_reports_guard_immutable')
             AND t.tgenabled <> 'D'
-            AND pg_get_functiondef(p.oid) ILIKE '%RAISE EXCEPTION%'" 2>/dev/null | tr -d '[:space:]')"
-  if [[ "${trigger_guard:-0}" == "2" ]]; then
-    record_check PASS PGS-012 "Sent-prompt/final-report immutability triggers exist, are enabled and guard with RAISE EXCEPTION" ""
+            AND pg_get_functiondef(p.oid) ILIKE '%RAISE EXCEPTION%'")"; then
+    if [[ "${trigger_guard:-0}" == "2" ]]; then
+      record_check PASS PGS-012 "Sent-prompt/final-report immutability triggers exist, are enabled and guard with RAISE EXCEPTION" ""
+    else
+      record_check FAIL PGS-012 "Sent-prompt/final-report immutability triggers are missing, disabled, or lack a guard" "found ${trigger_guard:-0}/2"
+    fi
   else
-    record_check FAIL PGS-012 "Sent-prompt/final-report immutability triggers are missing, disabled, or lack a guard" "found ${trigger_guard:-0}/2"
+    record_check FAIL PGS-012 "Sent-prompt/final-report immutability trigger query failed" "cannot confirm trigger state (missing table/relation, connectivity or permission problem)"
   fi
 
   if docker exec -i "$pg_cid" env PGPASSWORD="$control_pw" \
@@ -496,16 +539,61 @@ if [[ -n "$(container_id postgres)" ]] && is_root; then
     record_check PASS PGS-015 "backup_reader cannot write Work Sessions" "read-only enforced"
   fi
 
-  work_session_guard="$(docker exec -i "$pg_cid" env PGPASSWORD="$control_pw" \
-       psql -U control_app -d project_control -tAc \
+  if work_session_guard="$(run_psql_scalar control_app "$control_pw" \
        "SELECT count(*) FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid
           WHERE t.tgenabled <> 'D' AND pg_get_functiondef(p.oid) ILIKE '%RAISE EXCEPTION%'
             AND ((t.tgname='work_sessions_guard_mutation' AND t.tgrelid='work_sessions'::regclass AND p.proname='guard_work_session_mutation')
-              OR (t.tgname='work_session_amendments_require_closed_parent' AND t.tgrelid='work_session_amendments'::regclass AND p.proname='guard_work_session_amendment_parent_closed'))" 2>/dev/null | tr -d '[:space:]')"
-  if [[ "${work_session_guard:-0}" == "2" ]]; then
-    record_check PASS PGS-016 "Work Session immutability/lifecycle triggers are enabled and guarded" ""
+              OR (t.tgname='work_session_amendments_require_closed_parent' AND t.tgrelid='work_session_amendments'::regclass AND p.proname='guard_work_session_amendment_parent_closed'))")"; then
+    if [[ "${work_session_guard:-0}" == "2" ]]; then
+      record_check PASS PGS-016 "Work Session immutability/lifecycle triggers are enabled and guarded" ""
+    else
+      record_check FAIL PGS-016 "Work Session immutability/lifecycle triggers are incomplete" "found ${work_session_guard:-0}/2"
+    fi
   else
-    record_check FAIL PGS-016 "Work Session immutability/lifecycle triggers are incomplete" "found ${work_session_guard:-0}/2"
+    record_check FAIL PGS-016 "Work Session immutability/lifecycle trigger query failed" "cannot confirm trigger state (missing table/relation, connectivity or permission problem)"
+  fi
+
+  # A success here is unambiguously FAIL — the mutation went through. A
+  # failure is only the intended PASS when PostgreSQL's own privilege system
+  # is what refused it; any other failure reason (project_actions not yet
+  # migrated, a connectivity problem, ...) means this probe has not actually
+  # proven the append-only guarantee and must not be reported as if it had.
+  delete_stderr="$(docker exec -i "$pg_cid" env PGPASSWORD="$control_pw" \
+       psql -U control_app -d project_control -tAc \
+       "DELETE FROM project_actions WHERE false" 2>&1 >/dev/null)" && delete_status=0 || delete_status=$?
+  if (( delete_status == 0 )); then
+    record_check FAIL PGS-017 "control_app can DELETE Repository Actions" "action history must never be physically deleted"
+  elif _mutation_denied_by_privilege "$delete_stderr"; then
+    record_check PASS PGS-017 "control_app cannot DELETE Repository Actions" "no physical deletion"
+  else
+    record_check FAIL PGS-017 "DELETE probe against project_actions failed for a reason other than privilege denial" "cannot confirm the append-only guarantee (e.g. the table may not be migrated yet)"
+  fi
+
+  insert_stderr="$(docker exec -i "$pg_cid" env PGPASSWORD="$backup_pw" \
+       psql -U backup_reader -d project_control -tAc \
+       "INSERT INTO project_actions (project_id, kind, risk, plan_json, fingerprint, expires_at)
+          SELECT id, 'git.commit', 'low', '{}'::jsonb, repeat('a',64), now() FROM projects WHERE false" \
+       2>&1 >/dev/null)" && insert_status=0 || insert_status=$?
+  if (( insert_status == 0 )); then
+    record_check FAIL PGS-018 "backup_reader can write Repository Action history" "the table must remain SELECT-only"
+  elif _mutation_denied_by_privilege "$insert_stderr"; then
+    record_check PASS PGS-018 "backup_reader cannot write Repository Actions" "read-only enforced"
+  else
+    record_check FAIL PGS-018 "INSERT probe against project_actions failed for a reason other than privilege denial" "cannot confirm the read-only guarantee (e.g. the table may not be migrated yet)"
+  fi
+
+  if action_guard="$(run_psql_scalar control_app "$control_pw" \
+       "SELECT count(*) FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid
+          WHERE t.tgenabled <> 'D' AND pg_get_functiondef(p.oid) ILIKE '%RAISE EXCEPTION%'
+            AND t.tgname='project_actions_guard_mutation' AND t.tgrelid='project_actions'::regclass
+            AND p.proname='guard_project_action_mutation'")"; then
+    if [[ "${action_guard:-0}" == "1" ]]; then
+      record_check PASS PGS-019 "Repository Action settlement/lifecycle trigger is enabled and guarded" ""
+    else
+      record_check FAIL PGS-019 "Repository Action settlement/lifecycle trigger is missing, disabled, or unguarded" "found ${action_guard:-0}/1"
+    fi
+  else
+    record_check FAIL PGS-019 "Repository Action settlement/lifecycle trigger query failed" "cannot confirm trigger state (missing table/relation, connectivity or permission problem)"
   fi
 else
   record_check SKIP PGS-001 "PostgreSQL role isolation" "requires root and a running postgres container"
@@ -804,6 +892,156 @@ else
   record_check SKIP RNR-011 "Runner read-access functional proof" "requires root, nsenter, a running runner, and an existing configured root"
   record_check SKIP RNR-012 "Runner write-rejection functional proof" "requires root, nsenter, a running runner, and an existing configured root"
   record_check SKIP RNR-013 "Allowed-root isolation functional proof" "requires root, nsenter, a running runner, and an existing configured root"
+fi
+
+# =============================================================================
+# 7c. Repository Actions — write-enabled confinement
+#
+# The shipped default is an empty write-enabled list, which is what RNR-016
+# below proves directly: with nothing configured, not one path anywhere under
+# an allowed root is writable in the runner's namespace, so every claim
+# RNR-011/012/013 already established for ordinary read-only projects still
+# holds unchanged. RNR-015 proves the narrower, opted-in case: when a project
+# *is* write-enabled, only its .git directory becomes writable — the working
+# tree the operator's own files live in stays exactly as read-only as before.
+# =============================================================================
+log_step "Repository Actions: write-enabled confinement"
+
+WRITE_ENABLED_FILE="${PC_ROOT}/config/write-enabled-projects.conf"
+WRITE_DROPIN_FILE="/etc/systemd/system/project-control-runner.service.d/20-write-enabled-projects.conf"
+
+if [[ -f "$WRITE_ENABLED_FILE" ]]; then
+  mode="$(stat -c '%a' "$WRITE_ENABLED_FILE" 2>/dev/null || echo '')"
+  owner="$(stat -c '%U:%G' "$WRITE_ENABLED_FILE" 2>/dev/null || echo '')"
+  if [[ "$mode" == "644" && "$owner" == "root:root" ]]; then
+    record_check PASS RNR-014 "write-enabled-projects.conf is root-owned (0644)" ""
+  else
+    record_check FAIL RNR-014 "write-enabled-projects.conf ownership/mode is ${owner:-unknown} ${mode:-unknown}" "expected root:root 0644"
+  fi
+else
+  record_check WARN RNR-014 "write-enabled-projects.conf is missing" "shipped default: no project is write-enabled; this is expected on a fresh install"
+fi
+
+WRITE_ENABLED_PROJECTS=()
+[[ -f "$WRITE_ENABLED_FILE" ]] && mapfile -t WRITE_ENABLED_PROJECTS < <(grep -vE '^[[:space:]]*(#|$)' "$WRITE_ENABLED_FILE" 2>/dev/null || true)
+
+if [[ -f "$WRITE_DROPIN_FILE" ]]; then
+  # Every effective line must be a BindPaths= (never BindReadOnlyPaths=,
+  # which would be a no-op contradicting the drop-in's own purpose) targeting
+  # a path that ends in /.git specifically — never the bare project
+  # directory, which would silently make the whole working tree writable.
+  dropin_bad=0
+  dropin_bind_count=0
+  while IFS= read -r line; do
+    [[ "$line" == BindReadOnlyPaths=* ]] && { dropin_bad=1; break; }
+    [[ "$line" == BindPaths=* ]] || continue
+    dropin_bind_count=$((dropin_bind_count + 1))
+    [[ "$line" == *"/.git" ]] || { dropin_bad=1; break; }
+  done < <(grep -vE '^[[:space:]]*(#|\[)' "$WRITE_DROPIN_FILE" 2>/dev/null || true)
+  if (( dropin_bad )); then
+    record_check FAIL RNR-015 "write-enabled drop-in contains an entry not scoped to a .git directory" "every BindPaths= entry must end in /.git, and none may be BindReadOnlyPaths="
+  else
+    record_check PASS RNR-015 "write-enabled drop-in grants only .git-scoped BindPaths= exceptions" "${dropin_bind_count} entr$([[ $dropin_bind_count == 1 ]] && echo y || echo ies)"
+  fi
+elif (( ${#WRITE_ENABLED_PROJECTS[@]} == 0 )); then
+  record_check PASS RNR-015 "No write-enabled drop-in present" "matches an empty write-enabled list"
+else
+  record_check FAIL RNR-015 "write-enabled-projects.conf has entries but no drop-in was generated" "run: sudo ./pcctl install"
+fi
+
+# Functional, kernel-level proof, reusing the same runner mount namespace
+# RNR-011/012/013 already entered. Two claims, both load-bearing:
+#
+#   1. With the list empty (the shipped default), nothing under any allowed
+#      root is writable — i.e. Repository Actions being *implemented* changes
+#      nothing about a deployment that has not opted in.
+#   2. For the first configured write-enabled project (if any), its .git is
+#      writable but a fixture placed directly in the project's *working tree*
+#      (never inside .git) is not — the operator's own files stay read-only
+#      even on a project that has opted into commits.
+if is_root && have nsenter && [[ "$runner_pid" -gt 0 && -r "/proc/${runner_pid}/ns/mnt" ]]; then
+  if (( ${#WRITE_ENABLED_PROJECTS[@]} == 0 )); then
+    if [[ -n "$first_root" && -d "$first_root" ]]; then
+      probe_dir="${first_root}/.pc-verify-security-write-probe"
+      rm -rf -- "$probe_dir" 2>/dev/null || true
+      mkdir -p -- "$probe_dir"
+      nsenter -t "$runner_pid" -m -- sh -c "mkdir -p '${probe_dir}/x' 2>/dev/null" >/dev/null 2>&1 && default_write_status=0 || default_write_status=$?
+      rm -rf -- "$probe_dir" 2>/dev/null || true
+      if [[ "$default_write_status" -ne 0 ]]; then
+        record_check PASS RNR-016 "With an empty write-enabled list, the runner can create nothing under ${first_root}" "default posture unchanged"
+      else
+        record_check FAIL RNR-016 "Runner CAN write under ${first_root} despite an empty write-enabled list" "critical — Repository Actions must be strictly opt-in"
+      fi
+    else
+      record_check SKIP RNR-016 "Write-enabled functional proof" "no configured allowed root to probe"
+    fi
+  else
+    write_project="${WRITE_ENABLED_PROJECTS[0]}"
+    if [[ -d "$write_project" ]]; then
+      git_probe="${write_project}/.git/.pc-verify-security-probe"
+      tree_probe="${write_project}/.pc-verify-security-probe"
+      nsenter -t "$runner_pid" -m -- sh -c "printf x > '${git_probe}' && rm -f '${git_probe}'" >/dev/null 2>&1 && git_write_status=0 || git_write_status=$?
+      nsenter -t "$runner_pid" -m -- sh -c "printf x > '${tree_probe}'" >/dev/null 2>&1 && tree_write_status=0 || tree_write_status=$?
+      rm -f "${write_project}/.git/.pc-verify-security-probe" "${tree_probe}" 2>/dev/null || true
+      if [[ "$git_write_status" -eq 0 ]]; then
+        record_check PASS RNR-016 "Runner can write inside ${write_project}/.git" ""
+      else
+        record_check FAIL RNR-016 "Runner cannot write inside ${write_project}/.git" "the write-enabled bind mount is not visible in the runner's namespace"
+      fi
+      if [[ "$tree_write_status" -ne 0 ]]; then
+        record_check PASS RNR-016 "Runner still cannot write the working tree of write-enabled ${write_project}" "commit access is .git-scoped only"
+      else
+        record_check FAIL RNR-016 "Runner CAN write the working tree of write-enabled ${write_project}" "critical — only .git may ever be writable"
+      fi
+    else
+      record_check SKIP RNR-016 "Write-enabled functional proof" "configured project ${write_project} does not exist on disk"
+    fi
+  fi
+else
+  record_check SKIP RNR-016 "Write-enabled functional proof" "requires root, nsenter, and a running runner"
+fi
+
+# Live proof that project.git.commit refuses a project that is not on the
+# write-enabled list, and refuses the same command/argv/env-shaped hostile
+# extensions RNR-007 already proves against every other operation.
+if [[ -S "$PC_RUNNER_SOCKET" ]] && have python3 && (is_root || [[ -r "$PC_RUNNER_SOCKET" ]]); then
+  commit_probe_result="$(python3 - "$PC_RUNNER_SOCKET" <<'PY' 2>/dev/null || echo "error"
+import json, socket, sys
+path = sys.argv[1]
+hostile = [
+    {"requestId": "sec-probe-cm01", "operation": "project.git.commit",
+     "params": {"path": "/tmp", "branch": "main", "expectedHead": "", "message": "x", "paths": ["a"]}},
+    {"requestId": "sec-probe-cm02", "operation": "project.git.commit",
+     "params": {"path": "/tmp", "branch": "main", "expectedHead": "", "message": "x", "paths": ["a"], "command": "id"}},
+    {"requestId": "sec-probe-cm03", "operation": "project.git.commit",
+     "params": {"path": "/tmp", "branch": "main", "expectedHead": "", "message": "x", "paths": ["a"], "env": {"GIT_SSH_COMMAND": "sh"}}},
+    {"requestId": "sec-probe-cm04", "operation": "project.git.commit",
+     "params": {"path": "/tmp", "branch": "main", "expectedHead": "", "message": "x", "paths": [".env"]}},
+]
+for payload in hostile:
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(5)
+        s.connect(path)
+        s.sendall((json.dumps(payload) + "\n").encode())
+        data = json.loads(s.recv(65536).decode().strip())
+        s.close()
+        result = data.get("result", {})
+        if data.get("ok") is True and (result.get("committed") is True):
+            print("ACCEPTED")
+            sys.exit(0)
+    except Exception:
+        pass
+print("REJECTED")
+PY
+)"
+  case "$commit_probe_result" in
+    REJECTED) record_check PASS RNR-017 "Runner refuses project.git.commit for a non-write-enabled or hostile request" "4 probes refused" ;;
+    ACCEPTED) record_check FAIL RNR-017 "Runner ACCEPTED a project.git.commit it must have refused" "critical" ;;
+    *)        record_check WARN RNR-017 "Runner project.git.commit rejection probe inconclusive" "$commit_probe_result" ;;
+  esac
+else
+  record_check SKIP RNR-017 "Runner project.git.commit rejection probe" "socket not readable by this user"
 fi
 
 # =============================================================================

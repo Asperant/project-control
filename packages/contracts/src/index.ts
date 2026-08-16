@@ -20,4 +20,5 @@ export * from './agent-runs.js';
 export * from './development.js';
 export * from './memory.js';
 export * from './resume.js';
+export * from './repository-actions.js';
 export * from './errors.js';

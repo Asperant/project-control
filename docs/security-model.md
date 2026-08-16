@@ -430,6 +430,56 @@ planted secret file and a symlink escape attempt.
 
 ---
 
+## 12. Repository Actions
+
+**Claim: the runner can write to at most one thing — a single project's
+`.git` directory, only after an operator has explicitly opted that exact
+project in — and even there, the working tree it lives in stays read-only.**
+
+Full design in [repository-actions.md](repository-actions.md); this section
+is the security summary.
+
+This is the first host-filesystem write grant the runner has ever held.
+Every prior operation (project registration, Git reads, Development State)
+is strictly read-only, and that stays true for every project that has not
+been explicitly opted in — `config/write-enabled-projects.conf` ships empty,
+and with it empty, `project.git.commit` refuses every project just as if the
+operation did not exist.
+
+Opting a project in (`sudo ./pcctl enable-repo-writes <path>`) does three
+things, all narrowly scoped to that one project:
+
+1. Adds its canonical path to the write-enabled list.
+2. Grants the runner's OS user a POSIX ACL write grant on `<project>/.git`
+   only — never the project directory itself.
+3. Adds a matching `BindPaths=` systemd exception scoped to `<project>/.git`
+   — the working tree keeps the same `BindReadOnlyPaths=` exception project
+   registration already gave it.
+
+The one write operation, `project.git.commit`, never runs `git add` or
+`git commit` against the repository's real index. It builds a commit through
+plumbing against a throwaway index (`GIT_INDEX_FILE` inside `.git`, removed
+when the call returns), so the operator's own in-progress staging is never
+disturbed, and the one call that changes anything durable —
+`update-ref refs/heads/<branch> <new> <expectedOld>` — is a compare-and-swap
+against an operator-observed HEAD, not an unconditional write. Every
+invocation disables hook execution (`core.hooksPath=/dev/null`) and commit
+signing prompts (`commit.gpgsign=false`), and reads commit identity only from
+the repository's own local config, never fabricating one.
+
+*Verified by:* `RNR-014` (write-enabled-projects.conf ownership),
+`RNR-015` (the systemd drop-in grants only `.git`-scoped `BindPaths=`, never
+`BindReadOnlyPaths=` and never the bare project directory), `RNR-016`
+(functional, kernel-level: with the list empty, nothing is writable anywhere
+under an allowed root; with one project enabled, only its `.git` is
+writable and its working tree still is not), `RNR-017` (the runner refuses
+`project.git.commit` for a non-write-enabled project and refuses
+command/argv/env-shaped hostile extensions to that operation specifically),
+`PGS-017` … `PGS-019` (append-only `project_actions` history at the
+PostgreSQL privilege level).
+
+---
+
 ## What this design deliberately does not do
 
 - No public webhook or management port.
@@ -438,4 +488,9 @@ planted secret file and a symlink escape attempt.
   projects).
 - No `sudoers` entry for any service account.
 - No raw shell endpoint, in any component, at any privilege level.
-- No automatic commit, push or deploy.
+- No push, fetch, pull, sync, or any working-tree mutation (checkout, reset,
+  merge, rebase, stash) — Repository Actions supports a confirmed `git.commit`
+  only. See [repository-actions.md](repository-actions.md#scope) and the risk
+  registry for why push specifically is a distinct future effort.
+- No automatic deploy, and no automatic commit either — every Repository
+  Action requires an explicit, previewed confirmation.

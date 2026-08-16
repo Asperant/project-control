@@ -224,7 +224,7 @@ export function ProjectDetail({
       {view === 'resume' ? (
         <ResumeView projectId={projectId} canWrite={canWrite} archived={project.status === 'archived'} onSessionExpired={onSessionExpired} onOpenMemory={(checkpointId) => { setMemoryCheckpointId(checkpointId ?? null); setView('memory'); }} />
       ) : view === 'development' ? (
-        <DevelopmentView projectId={projectId} archived={project.status === 'archived'} onSessionExpired={onSessionExpired} />
+        <DevelopmentView projectId={projectId} archived={project.status === 'archived'} canWrite={canWrite} onSessionExpired={onSessionExpired} />
       ) : view === 'roadmap' ? (
         <RoadmapView projectId={projectId} canWrite={canWrite} archived={project.status === 'archived'} onSessionExpired={onSessionExpired} />
       ) : view === 'memory' ? (

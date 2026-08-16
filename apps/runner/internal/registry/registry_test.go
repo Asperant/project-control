@@ -161,6 +161,62 @@ func TestValidateParamsEnforcesStringLength(t *testing.T) {
 	}
 }
 
+func TestValidateParamsAcceptsStringArrayWithinBounds(t *testing.T) {
+	op := testOperation("test.op",
+		ParamSpec{Name: "paths", Type: "string[]", MaxLength: 5, MaxItems: 2},
+	)
+
+	raw, _ := json.Marshal(map[string]any{"paths": []string{"a", "bb"}})
+	params, err := ValidateParams(op, raw)
+	if err != nil {
+		t.Fatalf("ValidateParams rejected an in-bounds string array: %v", err)
+	}
+	items, ok := params["paths"].([]any)
+	if !ok || len(items) != 2 {
+		t.Fatalf("paths = %#v, want a 2-element []any", params["paths"])
+	}
+}
+
+func TestValidateParamsRejectsStringArrayExceedingMaxItems(t *testing.T) {
+	op := testOperation("test.op",
+		ParamSpec{Name: "paths", Type: "string[]", MaxItems: 2},
+	)
+	raw, _ := json.Marshal(map[string]any{"paths": []string{"a", "b", "c"}})
+	if _, err := ValidateParams(op, raw); err == nil {
+		t.Fatal("ValidateParams accepted a string array exceeding MaxItems")
+	}
+}
+
+func TestValidateParamsRejectsStringArrayElementExceedingMaxLength(t *testing.T) {
+	op := testOperation("test.op",
+		ParamSpec{Name: "paths", Type: "string[]", MaxLength: 3},
+	)
+	raw, _ := json.Marshal(map[string]any{"paths": []string{"ok", "toolong"}})
+	if _, err := ValidateParams(op, raw); err == nil {
+		t.Fatal("ValidateParams accepted a string array element exceeding MaxLength")
+	}
+}
+
+func TestValidateParamsRejectsStringArrayWithNonStringElement(t *testing.T) {
+	op := testOperation("test.op",
+		ParamSpec{Name: "paths", Type: "string[]"},
+	)
+	raw := json.RawMessage(`{"paths":["a", 5]}`)
+	if _, err := ValidateParams(op, raw); err == nil {
+		t.Fatal("ValidateParams accepted a non-string element in a string[] parameter")
+	}
+}
+
+func TestValidateParamsRejectsNonArrayForStringArrayType(t *testing.T) {
+	op := testOperation("test.op",
+		ParamSpec{Name: "paths", Type: "string[]"},
+	)
+	raw := json.RawMessage(`{"paths":"not-an-array"}`)
+	if _, err := ValidateParams(op, raw); err == nil {
+		t.Fatal("ValidateParams accepted a non-array value for a string[] parameter")
+	}
+}
+
 func TestValidateParamsRejectsNonObjects(t *testing.T) {
 	op := testOperation("test.op")
 

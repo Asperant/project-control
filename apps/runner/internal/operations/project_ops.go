@@ -221,6 +221,7 @@ func gitDevelopmentToMap(d gitinfo.Development) map[string]any {
 		files = append(files, map[string]any{
 			"path": f.Path, "oldPath": nullableString(f.OldPath), "state": f.State,
 			"staged": f.Staged, "unstaged": f.Unstaged, "untracked": f.Untracked,
+			"size": f.Size, "modifiedAt": nullableString(f.ModifiedAt),
 		})
 	}
 	commits := make([]any, 0, len(d.RecentCommits))

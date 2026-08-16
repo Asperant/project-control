@@ -616,6 +616,60 @@ func TestGitEnvironmentDisablesLazyFetch(t *testing.T) {
 	}
 }
 
+// TestInspectDevelopmentSucceedsUnderDifferentOwnership guards against a
+// regression of a real production condition: the runner's uid never matches
+// the filesystem owner of a registered project by design (see the
+// internal/gitinfo package doc), and git >= 2.35.2 refuses to operate on a
+// repository it does not own ("detected dubious ownership") unless
+// safe.directory names it explicitly.
+//
+// GIT_TEST_ASSUME_DIFFERENT_OWNER=1 is git's own test hook for exercising
+// that exact path without actually chown-ing the fixture, but gitCommand
+// builds the child's environment from a fixed literal list rather than
+// os.Environ(), so t.Setenv on the test process would never reach the git
+// subprocess. A thin wrapper script that exports the variable itself, then
+// execs the real git, is what TestGitEnvironmentDisablesLazyFetch below uses
+// for the same reason, and is reused here.
+func TestInspectDevelopmentSucceedsUnderDifferentOwnership(t *testing.T) {
+	if !Available() {
+		t.Skip("git binary not available")
+	}
+	dir := initRepo(t)
+	realGit := gitPath
+
+	wrapper := filepath.Join(t.TempDir(), "git-dubious-owner-wrapper.sh")
+	script := "#!/bin/sh\nexport GIT_TEST_ASSUME_DIFFERENT_OWNER=1\nexec '" + realGit + "' \"$@\"\n"
+	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	originalGitPath := gitPath
+	t.Cleanup(func() { gitPath = originalGitPath })
+	gitPath = wrapper
+
+	development, err := InspectDevelopment(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !development.Repository.IsRepository {
+		t.Fatalf("repository not detected under simulated different ownership: %+v", development.Repository)
+	}
+	if development.Repository.ErrorCode != "" {
+		t.Fatalf("unexpected error code under simulated different ownership: %q", development.Repository.ErrorCode)
+	}
+	if development.Head.Branch != "main" {
+		t.Fatalf("branch = %q, want %q", development.Head.Branch, "main")
+	}
+
+	summary, err := Summarise(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !summary.Present {
+		t.Fatal("Summarise reported Present=false under simulated different ownership")
+	}
+}
+
 func TestStatusRecordScannerRejectsOversizedSingleRecord(t *testing.T) {
 	scanner := bufio.NewScanner(strings.NewReader(strings.Repeat("x", maxStatusRecordBytes+1) + "\x00"))
 	scanner.Buffer(make([]byte, 4096), maxStatusRecordBytes)
