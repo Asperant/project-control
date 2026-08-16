@@ -605,6 +605,9 @@ hostile = [
     {"requestId": "sec-probe-0001", "operation": "/bin/sh"},
     {"requestId": "sec-probe-0002", "operation": "system.health", "command": "id"},
     {"requestId": "sec-probe-0003", "operation": "exec"},
+    {"requestId": "sec-probe-0004", "operation": "project.git.development", "params": {"path": "/tmp", "args": ["commit"]}},
+    {"requestId": "sec-probe-0005", "operation": "project.git.development", "params": {"path": "/tmp", "command": "git push"}},
+    {"requestId": "sec-probe-0006", "operation": "project.git.development", "params": {"path": "/tmp", "env": {"GIT_SSH_COMMAND": "sh"}}},
 ]
 for payload in hostile:
     try:
@@ -623,7 +626,7 @@ print("REJECTED")
 PY
 )"
   case "$probe_result" in
-    REJECTED) record_check PASS RNR-007 "Runner rejects raw command requests" "3 hostile payloads refused" ;;
+    REJECTED) record_check PASS RNR-007 "Runner rejects raw command requests" "6 hostile payloads refused, including Development argv/env injection" ;;
     ACCEPTED) record_check FAIL RNR-007 "Runner ACCEPTED a raw command request" "critical" ;;
     *)        record_check WARN RNR-007 "Runner command-rejection probe inconclusive" "$probe_result" ;;
   esac

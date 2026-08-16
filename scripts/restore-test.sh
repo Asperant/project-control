@@ -337,13 +337,13 @@ else
   fail "restored Work Session integrity failed (orphan sessions=${orphan_work_sessions}, invalid amendment parents=${invalid_amendment_parents}, cross-project checkpoints=${cross_project_checkpoints}, invalid lifecycle=${invalid_session_lifecycle}, duplicate open projects=${open_session_duplicates})"
 fi
 
-# This release continues writing checkpoint v2. Historical v1 rows must remain
-# valid, while v2 rows additionally carry the compact recentAgentActivity list.
+# New checkpoints use v3. Historical v1/v2 rows remain valid; v3 additionally
+# carries compact metadata-only Git state.
 invalid_checkpoint_versions="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
   psql -U postgres -d project_control -tAc \
-  "SELECT count(*) FROM project_checkpoints WHERE snapshot_version NOT IN (1,2) OR snapshot_json->'version' IS DISTINCT FROM to_jsonb(snapshot_version) OR (snapshot_version=2 AND jsonb_typeof(snapshot_json->'recentAgentActivity') IS DISTINCT FROM 'array')" 2>/dev/null || echo 0)"
+  "SELECT count(*) FROM project_checkpoints WHERE snapshot_version NOT IN (1,2,3) OR snapshot_json->'version' IS DISTINCT FROM to_jsonb(snapshot_version) OR (snapshot_version IN (2,3) AND jsonb_typeof(snapshot_json->'recentAgentActivity') IS DISTINCT FROM 'array') OR (snapshot_version=3 AND (jsonb_typeof(snapshot_json->'gitState') IS DISTINCT FROM 'object' OR snapshot_json->'gitState' ?| ARRAY['files','diff','rawUrl','recentCommits','sourceBody']))" 2>/dev/null || echo 0)"
 if [[ "${invalid_checkpoint_versions:-0}" == "0" ]]; then
-  log_ok "project_control: checkpoint v1/v2 compatibility holds after restore"
+  log_ok "project_control: checkpoint v1/v2/v3 compatibility and compact v3 Git state hold after restore"
 else
   fail "restored project_control has ${invalid_checkpoint_versions} incompatible checkpoint snapshot(s)"
 fi

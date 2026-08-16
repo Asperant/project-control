@@ -39,6 +39,13 @@ function viewModel(overrides: Partial<ResumeProjectResponse> = {}): ResumeProjec
     lastCheckpoint: null,
     changesSinceCheckpoint: { hasCheckpoint: false, sinceCheckpointId: null, sinceCreatedAt: null, items: [] },
     activeAndBlockedWork: { active: [], blocked: [] },
+    developmentState: {
+      status: 'not_repository', errorCode: null, repository: { available: true, isRepository: false },
+      head: { sha: null, shortSha: null, branch: null, detached: false, unborn: false },
+      workingTree: { clean: null, stagedCount: 0, unstagedCount: 0, untrackedCount: 0, conflictedCount: 0, totalChangedCount: 0 },
+      remote: null, github: { detected: false, configured: false, status: 'unsupported' },
+      checkpointComparison: { status: 'no_git_checkpoint' }, attention: [],
+    },
     recentAgentWork: [],
     importantMemory: [],
     workSessionHistory: { workSessions: [], page: 1, pageSize: 20, total: 0, nextCursor: null },
@@ -51,10 +58,10 @@ function render(data: ResumeProjectResponse): string {
 }
 
 describe('Resume presentation', () => {
-  it('renders all eleven sections and explicit empty states in order', () => {
+  it('renders all twelve sections and explicit empty states in order', () => {
     const html = render(viewModel());
     const headings = Array.from(html.matchAll(/<h3[^>]*>(\d+)\./g), (match) => Number(match[1]));
-    expect(headings).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(headings).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     expect(html).toContain('No active project focus exists.');
     expect(html).toContain('No completed work session yet.');
     expect(html).toContain('No checkpoint has been created.');
@@ -84,5 +91,28 @@ describe('Resume presentation', () => {
     }));
     expect(html).toContain('API-selected acceptance step');
     expect(html).toContain('Based on: acceptance criterion');
+  });
+
+  it('renders backend-provided Git-aware checkpoint comparison facts', () => {
+    const base = viewModel();
+    const sha = 'a'.repeat(40);
+    const html = render(viewModel({
+      developmentState: {
+        ...base.developmentState,
+        status: 'available',
+        repository: { available: true, isRepository: true },
+        head: { sha, shortSha: 'aaaaaaa', branch: 'main', detached: false, unborn: false },
+        workingTree: { clean: false, stagedCount: 0, unstagedCount: 1, untrackedCount: 0, conflictedCount: 0, totalChangedCount: 1 },
+        checkpointComparison: {
+          status: 'compared', repositoryStateChanged: false, sameHead: false, headChanged: true,
+          branchChanged: false, workingTreeChanged: true, previousHeadSha: 'b'.repeat(40), currentHeadSha: sha,
+          previousBranch: 'main', currentBranch: 'main', checkpointDirty: false, currentDirty: true,
+        },
+      },
+    }));
+    expect(html).toContain('Since last Git-aware checkpoint');
+    expect(html).toContain('HEAD changed.');
+    expect(html).toContain('Branch unchanged.');
+    expect(html).toContain('Working tree state changed.');
   });
 });

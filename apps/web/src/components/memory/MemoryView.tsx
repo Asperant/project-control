@@ -484,6 +484,18 @@ function CheckpointDetailDialog({ checkpoint, onClose }: { checkpoint: Checkpoin
           <button type="button" onClick={onClose} aria-label="Close checkpoint detail">×</button>
         </div>
         {checkpoint.sessionNote && <p className="card-detail">{checkpoint.sessionNote}</p>}
+        {s.version === 3 && (
+          <Section title="Development state" empty={false}>
+            <ul className="steps">
+              <li><span className="step-name">Git status</span><span>{s.gitState.status.replace('_', ' ')}</span></li>
+              {s.gitState.status === 'available' && <>
+                <li><span className="step-name">Branch</span><span>{s.gitState.detached ? 'Detached HEAD' : s.gitState.branch ?? 'Unborn branch'}</span></li>
+                <li><span className="step-name">HEAD</span><span>{s.gitState.headShortSha ?? 'No commit yet'}</span></li>
+                <li><span className="step-name">Working tree</span><span>{s.gitState.dirty ? 'Dirty' : 'Clean'}</span></li>
+              </>}
+            </ul>
+          </Section>
+        )}
         <Section title="Current focus" empty={s.currentFocus.length === 0}>
           <ul className="steps">{s.currentFocus.map((m) => <li key={m.milestoneId}>{m.title}</li>)}</ul>
         </Section>

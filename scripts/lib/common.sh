@@ -217,6 +217,232 @@ container_health() {
 }
 
 # --- Deployment readiness -----------------------------------------------------
+# _runner_service_state is intentionally a small seam: production uses
+# systemd, while the regression suite can provide deterministic state changes.
+_runner_service_state() {
+  systemctl is-active project-control-runner.service 2>/dev/null || true
+}
+
+# Sends one fixed, typed request over the Unix socket. Exit 2 means the socket
+# is still coming up and may be retried; exit 3 means a listener answered with
+# an invalid or unsuccessful protocol response and must fail closed.
+_runner_health_probe() {
+  python3 - "$PC_RUNNER_SOCKET" <<'PY'
+import json
+import socket
+import sys
+
+path = sys.argv[1]
+request_id = "readiness-probe-0001"
+request = {
+    "requestId": request_id,
+    "operation": "system.health",
+}
+
+client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+client.settimeout(0.5)
+try:
+    client.connect(path)
+    client.sendall((json.dumps(request, separators=(",", ":")) + "\n").encode())
+    response = bytearray()
+    while b"\n" not in response:
+        chunk = client.recv(4096)
+        if not chunk:
+            sys.exit(2)
+        response.extend(chunk)
+        if len(response) > 65536:
+            sys.exit(3)
+except (ConnectionError, TimeoutError, OSError):
+    sys.exit(2)
+finally:
+    client.close()
+
+try:
+    payload = json.loads(bytes(response).split(b"\n", 1)[0])
+except (UnicodeDecodeError, json.JSONDecodeError):
+    sys.exit(3)
+
+if not isinstance(payload, dict):
+    sys.exit(3)
+if payload.get("requestId") != request_id or payload.get("operation") != "system.health":
+    sys.exit(3)
+if payload.get("ok") is not True or not isinstance(payload.get("result"), dict):
+    sys.exit(3)
+if payload["result"].get("socketOK") is not True:
+    sys.exit(3)
+sys.exit(0)
+PY
+}
+
+# wait_for_runner_ready [timeout_seconds=30] [interval_seconds=0.5]
+#
+# A runner is ready only when systemd reports active, the configured path is a
+# Unix socket, and the fixed system.health request succeeds. Activating state,
+# a not-yet-created socket, and temporary connect/EOF/timeout failures are
+# retried within one bounded deadline. Terminal service states, a non-socket
+# path, or an invalid protocol response fail immediately.
+wait_for_runner_ready() {
+  local timeout="${1:-30}" interval="${2:-0.5}"
+  local started deadline now attempt=0 state probe_rc reason
+  [[ "$timeout" =~ ^[1-9][0-9]*$ ]] || { log_error "runner readiness timeout must be a positive integer"; return 1; }
+  started="$(date +%s%N)"
+  deadline=$(( started + timeout * 1000000000 ))
+
+  while true; do
+    attempt=$((attempt+1))
+    reason=""
+    state="$(_runner_service_state)"
+    case "$state" in
+      active)
+        if [[ -e "$PC_RUNNER_SOCKET" || -L "$PC_RUNNER_SOCKET" ]] && [[ ! -S "$PC_RUNNER_SOCKET" ]]; then
+          log_error "runner readiness failed: ${PC_RUNNER_SOCKET} exists but is not a Unix socket"
+          return 1
+        fi
+        if [[ -S "$PC_RUNNER_SOCKET" ]]; then
+          if _runner_health_probe; then
+            now="$(date +%s%N)"
+            log_ok "runner ready: system.health succeeded (attempt ${attempt}, $(( (now - started) / 1000000 ))ms)"
+            return 0
+          else
+            probe_rc=$?
+          fi
+          if (( probe_rc != 2 )); then
+            log_error "runner readiness failed: system.health returned an invalid or unsuccessful protocol response"
+            return 1
+          fi
+          reason="system.health connection is not available yet"
+        else
+          reason="Unix socket has not been published yet"
+        fi
+        ;;
+      activating|reloading)
+        reason="systemd is still ${state}"
+        ;;
+      failed|inactive|deactivating)
+        log_error "runner readiness failed: project-control-runner.service is ${state}"
+        return 1
+        ;;
+      *)
+        log_error "runner readiness failed: unexpected systemd state '${state:-unknown}'"
+        return 1
+        ;;
+    esac
+
+    now="$(date +%s%N)"
+    if (( now >= deadline )); then
+      log_error "runner did not become ready within ${timeout}s (last state ${state:-unknown}, ${attempt} attempt(s))"
+      return 1
+    fi
+    log_info "waiting for runner readiness (${reason:-state ${state}}, attempt ${attempt})"
+    sleep "$interval"
+  done
+}
+
+# runner_binary_matches_live_process <installed_binary>
+# Prevents snapshotting stale on-disk bytes while systemd is still executing a
+# different runner image. /proc/<pid>/exe is kernel-backed evidence of the
+# live executable, not a mutable path lookup.
+runner_binary_matches_live_process() {
+  local binary="$1" pid
+  [[ -r "$binary" && -x "$binary" ]] || return 1
+  pid="$(systemctl show project-control-runner.service -p MainPID --value 2>/dev/null || true)"
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  [[ -r "/proc/${pid}/exe" ]] || return 1
+  cmp -s "$binary" "/proc/${pid}/exe"
+}
+
+# deployment_images_match_lock [lock_file] [stack_env_file] proves that the
+# deployed lock, deployed stack.env, and currently running five-service stack
+# describe one coherent state. The two files are loaded into isolated
+# subshells so stack.env cannot silently overwrite a lock mismatch.
+deployment_images_match_lock() {
+  local lock="${1:-${PC_CONFIG_DIR}/versions.lock.env}"
+  local stack="${2:-${PC_CONFIG_DIR}/stack.env}"
+  local service expected cid running_id expected_id mismatch=0 i
+  local names=(PC_POSTGRES_IMAGE PC_N8N_IMAGE PC_CONTROL_API_IMAGE PC_WEB_IMAGE PC_CADDY_PROXY_IMAGE PC_STACK_VERSION)
+  local -a lock_values=() stack_values=()
+  [[ -r "$lock" && -r "$stack" ]] || { log_error "deployment consistency files are unreadable"; return 1; }
+  mapfile -t lock_values < <(
+    unset PC_POSTGRES_IMAGE PC_N8N_IMAGE PC_CONTROL_API_IMAGE PC_WEB_IMAGE PC_CADDY_PROXY_IMAGE PC_STACK_VERSION
+    # shellcheck disable=SC1090
+    source "$lock"
+    for i in "${names[@]}"; do printf '%s\n' "${!i:-}"; done
+  )
+  mapfile -t stack_values < <(
+    unset PC_POSTGRES_IMAGE PC_N8N_IMAGE PC_CONTROL_API_IMAGE PC_WEB_IMAGE PC_CADDY_PROXY_IMAGE PC_STACK_VERSION
+    # shellcheck disable=SC1090
+    source "$stack"
+    for i in "${names[@]}"; do printf '%s\n' "${!i:-}"; done
+  )
+  for i in "${!names[@]}"; do
+    if [[ -z "${lock_values[$i]:-}" || "${lock_values[$i]:-}" != "${stack_values[$i]:-}" ]]; then
+      log_error "deployment consistency failed: ${names[$i]} differs between versions.lock.env and stack.env"
+      mismatch=1
+    fi
+  done
+  (( mismatch == 0 )) || return 1
+
+  for service in postgres n8n control-api web caddy; do
+    case "$service" in
+      postgres) expected="${lock_values[0]}" ;;
+      n8n) expected="${lock_values[1]}" ;;
+      control-api) expected="${lock_values[2]}" ;;
+      web) expected="${lock_values[3]}" ;;
+      caddy) expected="${lock_values[4]}" ;;
+    esac
+    cid="$(container_id "$service")"
+    if [[ -z "$expected" || -z "$cid" ]]; then
+      log_error "deployment consistency failed for ${service}: expected image reference or container is missing"
+      mismatch=1
+      continue
+    fi
+    running_id="$(docker inspect --format '{{.Image}}' "$cid" 2>/dev/null || true)"
+    expected_id="$(docker image inspect --format '{{.Id}}' "$expected" 2>/dev/null || true)"
+    if [[ -z "$running_id" || -z "$expected_id" || "$running_id" != "$expected_id" ]]; then
+      log_error "deployment consistency failed for ${service}: running image does not match the deployed lock"
+      mismatch=1
+    fi
+  done
+  (( mismatch == 0 ))
+}
+
+# validate_snapshot_image_manifest <running-images.env>
+# Requires exactly one concrete image ID for every service rollback reconciles.
+validate_snapshot_image_manifest() {
+  local file="$1" service image_id
+  local -A seen=()
+  [[ -r "$file" ]] || { log_error "rollback image manifest is missing: ${file}"; return 1; }
+  while IFS='=' read -r service image_id; do
+    [[ "$service" == \#* || -z "$service" ]] && continue
+    case "$service" in postgres|n8n|control-api|web|caddy) ;; *) log_error "rollback image manifest has unknown service: ${service}"; return 1 ;; esac
+    [[ -z "${seen[$service]:-}" ]] || { log_error "rollback image manifest repeats service: ${service}"; return 1; }
+    [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || { log_error "rollback image manifest has invalid image ID for ${service}"; return 1; }
+    seen[$service]="$image_id"
+  done <"$file"
+  for service in postgres n8n control-api web caddy; do
+    [[ -n "${seen[$service]:-}" ]] || { log_error "rollback image manifest is missing service: ${service}"; return 1; }
+  done
+}
+
+# running_images_match_snapshot <running-images.env>
+# Strict post-Compose reconciliation: success means each running container is
+# the exact immutable image ID captured by the rollback point.
+running_images_match_snapshot() {
+  local file="$1" service image_id cid running_id mismatch=0
+  validate_snapshot_image_manifest "$file" || return 1
+  while IFS='=' read -r service image_id; do
+    [[ "$service" == \#* || -z "$service" ]] && continue
+    cid="$(container_id "$service")"
+    running_id=""
+    [[ -n "$cid" ]] && running_id="$(docker inspect --format '{{.Image}}' "$cid" 2>/dev/null || true)"
+    if [[ -z "$running_id" || "$running_id" != "$image_id" ]]; then
+      log_error "rollback reconciliation failed for ${service}: running image is not the captured target"
+      mismatch=1
+    fi
+  done <"$file"
+  (( mismatch == 0 ))
+}
+
 # wait_for_api_route <url> <expected_code> [timeout_seconds=90] [interval_seconds=2]
 #
 # Polls <url> through the real production path (Caddy -> Control API) until it

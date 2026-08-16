@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { roadmapPrioritySchema, roadmapStatusSchema } from './roadmap.js';
 import { recentAgentActivitySchema } from './agent-runs.js';
+import { checkpointGitStateSchema } from './development.js';
 
 const uuid = z.string().uuid();
 const timestamp = z.string().datetime({ offset: true });
@@ -117,10 +118,10 @@ const snapshotMemorySchema = z.object({ id: uuid, type: memoryTypeSchema, title:
 
 /**
  * Snapshot format versioning. v1 shipped without any Agent Run awareness; v2
- * adds a small, body-free `recentAgentActivity` list. Old rows keep whatever
+ * adds a small, body-free `recentAgentActivity` list; v3 adds a compact,
+ * metadata-only Git state. Old rows keep whatever
  * `snapshot_version` they were written with — they are never rewritten — so
- * both shapes must stay parseable indefinitely. New checkpoints are always
- * written as v2 (see src/checkpoints/snapshot.ts).
+ * all shapes must stay parseable indefinitely.
  */
 const checkpointSnapshotBaseSchema = z.object({
   projectId: uuid,
@@ -144,9 +145,15 @@ export const checkpointSnapshotV2Schema = checkpointSnapshotBaseSchema.extend({
   version: z.literal(2),
   recentAgentActivity: z.array(recentAgentActivitySchema),
 });
-export const checkpointSnapshotSchema = z.discriminatedUnion('version', [checkpointSnapshotV1Schema, checkpointSnapshotV2Schema]);
+export const checkpointSnapshotV3Schema = checkpointSnapshotBaseSchema.extend({
+  version: z.literal(3),
+  recentAgentActivity: z.array(recentAgentActivitySchema),
+  gitState: checkpointGitStateSchema,
+}).strict();
+export const checkpointSnapshotSchema = z.discriminatedUnion('version', [checkpointSnapshotV1Schema, checkpointSnapshotV2Schema, checkpointSnapshotV3Schema]);
 export type CheckpointSnapshotV1 = z.infer<typeof checkpointSnapshotV1Schema>;
 export type CheckpointSnapshotV2 = z.infer<typeof checkpointSnapshotV2Schema>;
+export type CheckpointSnapshotV3 = z.infer<typeof checkpointSnapshotV3Schema>;
 export type CheckpointSnapshot = z.infer<typeof checkpointSnapshotSchema>;
 
 export const checkpointSummarySchema = z.object({

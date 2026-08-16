@@ -3,6 +3,7 @@ import { timestampSchema, uuidSchema } from './common.js';
 import { recentAgentActivitySchema } from './agent-runs.js';
 import { checkpointSummarySchema, memoryEntrySchema } from './memory.js';
 import { roadmapPrioritySchema } from './roadmap.js';
+import { developmentAttentionKeySchema, resumeDevelopmentStateSchema } from './development.js';
 
 export const workSessionStatusSchema = z.enum(['open', 'closed']);
 export type WorkSessionStatus = z.infer<typeof workSessionStatusSchema>;
@@ -130,7 +131,10 @@ export const resumeRecommendedNextActionSchema = z.discriminatedUnion('kind', [
 ]);
 
 export const resumeAttentionItemSchema = z.object({
-  key: z.enum(['blocked_tasks', 'unresolved_dependencies', 'incomplete_acceptance', 'agent_runs_awaiting_validation', 'failed_agent_runs', 'open_session_blockers']),
+  key: z.union([
+    z.enum(['blocked_tasks', 'unresolved_dependencies', 'incomplete_acceptance', 'agent_runs_awaiting_validation', 'failed_agent_runs', 'open_session_blockers']),
+    developmentAttentionKeySchema,
+  ]),
   label: z.string(),
   count: z.number().int().positive(),
 });
@@ -148,6 +152,7 @@ export const resumeWorkItemSchema = z.object({
 export const resumeProjectResponseSchema = z.object({
   projectId: uuidSchema,
   readOnly: z.boolean(),
+  developmentState: resumeDevelopmentStateSchema,
   currentFocus: resumeCurrentFocusSchema,
   recommendedNextAction: resumeRecommendedNextActionSchema,
   attentionRequired: z.object({

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type {
   AddWorkSessionAmendmentRequest, CloseWorkSessionRequest, StartWorkSessionRequest,
-  UpdateWorkSessionRequest, WorkSession, WorkSessionAmendment, WorkSessionListQuery,
+  UpdateWorkSessionRequest, WorkSession, WorkSessionAmendment, WorkSessionListQuery, CheckpointGitState,
 } from '@project-control/contracts';
 import type { Db, DbClient } from '../db/pool.js';
 import { withTransaction } from '../db/pool.js';
@@ -9,6 +9,8 @@ import { AppError, notFound } from '../errors.js';
 import { getProjectGuard, assertProjectMutable, type Executor } from '../projects/guard.js';
 import type { MutationAudit } from '../roadmap/store.js';
 import { createCheckpointInTransaction } from '../checkpoints/store.js';
+import type { RunnerClient } from '../runner/client.js';
+import { captureCheckpointGitState } from '../development/service.js';
 
 type WorkSessionRow = {
   id: string; project_id: string; goal: string; status: 'open' | 'closed';
@@ -173,8 +175,13 @@ export async function updateWorkSession(
 
 export async function closeWorkSession(
   db: Db, projectId: string, sessionId: string, actorId: string,
-  body: CloseWorkSessionRequest, audit: MutationAudit,
+  body: CloseWorkSessionRequest, audit: MutationAudit, runner: RunnerClient, requestId?: string,
 ): Promise<WorkSession> {
+  // Capture before opening the transaction; a runner failure becomes an
+  // unavailable v3 Git state and never blocks an otherwise valid close.
+  const gitState: CheckpointGitState | null = body.createCheckpoint
+    ? await captureCheckpointGitState(db, runner, projectId, requestId)
+    : null;
   return withTransaction(db, async (client) => {
     const { rows: projects } = await client.query<{ id: string; status: string; name: string }>(
       'SELECT id, status, name FROM projects WHERE id=$1 FOR UPDATE',
@@ -190,7 +197,7 @@ export async function closeWorkSession(
     let checkpointId: string | null = null;
     if (body.createCheckpoint) {
       const checkpoint = await createCheckpointInTransaction(
-        client, project, actorId, body.checkpointSessionNote, audit,
+        client, project, actorId, body.checkpointSessionNote, audit, gitState!,
       );
       checkpointId = checkpoint.id;
       await audit(client, 'work_session.checkpoint_created', {

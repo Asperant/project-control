@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import type { CheckpointDetail, CheckpointSnapshot, CheckpointSummary } from '@project-control/contracts';
+import type { CheckpointDetail, CheckpointGitState, CheckpointSnapshot, CheckpointSummary } from '@project-control/contracts';
 import type { Db, DbClient } from '../db/pool.js';
 import { withTransaction } from '../db/pool.js';
 import { notFound } from '../errors.js';
 import { getProjectGuard, assertProjectMutable as assertProjectMutableBase, type Executor } from '../projects/guard.js';
 import type { MutationAudit } from '../roadmap/store.js';
 import { buildCheckpointSnapshot } from './snapshot.js';
+import type { RunnerClient } from '../runner/client.js';
+import { captureCheckpointGitState } from '../development/service.js';
 
 function assertProjectMutable(project: { id: string; status: string }): void {
   assertProjectMutableBase(project, 'Checkpoint');
@@ -43,9 +45,10 @@ export async function createCheckpointInTransaction(
   actorId: string,
   sessionNote: string | undefined,
   audit: MutationAudit,
+  gitState: CheckpointGitState,
 ): Promise<CheckpointDetail> {
   assertProjectMutable(project);
-  const snapshot = await buildCheckpointSnapshot(client, project.id, project);
+  const snapshot = await buildCheckpointSnapshot(client, project.id, project, gitState);
   const id = randomUUID();
   await client.query(
     `INSERT INTO project_checkpoints (id, project_id, snapshot_version, snapshot_json, session_note, created_by)
@@ -64,7 +67,12 @@ export async function createCheckpointInTransaction(
 
 export async function createCheckpoint(
   db: Db, projectId: string, actorId: string, sessionNote: string | undefined, audit: MutationAudit,
+  runner: RunnerClient, requestId?: string,
 ): Promise<CheckpointDetail> {
+  // Runner I/O deliberately happens before opening the PostgreSQL transaction.
+  // Failure is represented in a compact unavailable snapshot and cannot block
+  // checkpoint persistence or extend the project-row lock duration.
+  const gitState = await captureCheckpointGitState(db, runner, projectId, requestId);
   return withTransaction(db, async (client) => {
     // Locking the project row serializes concurrent checkpoint creation for the
     // same project: each snapshot read happens with a stable view of the
@@ -76,7 +84,7 @@ export async function createCheckpoint(
     );
     const project = rows[0];
     if (!project) throw notFound('Project not found.');
-    return createCheckpointInTransaction(client, project, actorId, sessionNote, audit);
+    return createCheckpointInTransaction(client, project, actorId, sessionNote, audit, gitState);
   });
 }
 

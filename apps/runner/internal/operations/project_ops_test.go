@@ -2,9 +2,13 @@ package operations
 
 import (
 	"context"
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/project-control/runner/internal/registry"
 )
 
 func testConfig(t *testing.T, allowedRoot string) Config {
@@ -129,6 +133,64 @@ func TestValidationReasonMapsKnownErrors(t *testing.T) {
 		}
 		if result["reason"] != wantReason {
 			t.Errorf("path %q: reason = %v, want %v", input, result["reason"], wantReason)
+		}
+	}
+}
+
+func TestProjectGitDevelopmentIsRegisteredWithPathOnly(t *testing.T) {
+	root := t.TempDir()
+	ops := All(testConfig(t, root))
+	reg, err := registry.New(ops...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := reg.Lookup("project.git.development")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(op.Params) != 1 || op.Params[0].Name != "path" || !op.Params[0].Required {
+		t.Fatalf("params = %+v, want required path only", op.Params)
+	}
+	for _, raw := range []string{
+		`{"path":"/tmp/demo","command":"commit"}`,
+		`{"path":"/tmp/demo","args":["reset","--hard"]}`,
+		`{"path":"/tmp/demo","environment":{"GIT_CONFIG":"evil"}}`,
+		`{"path":"/tmp/demo","workingDirectory":"/"}`,
+	} {
+		if _, err := registry.ValidateParams(op, json.RawMessage(raw)); err == nil {
+			t.Fatalf("mutation-shaped params accepted: %s", raw)
+		}
+	}
+}
+
+func TestProjectGitDevelopmentReturnsComprehensiveModel(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not available")
+	}
+	root := t.TempDir()
+	project := filepath.Join(root, "demo")
+	if err := os.Mkdir(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "init", "-q", "-b", "main")
+	cmd.Dir = project
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	result, err := projectGitDevelopment(testConfig(t, root))(context.Background(), map[string]any{"path": project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["valid"] != true {
+		t.Fatalf("result = %+v", result)
+	}
+	development, ok := result["development"].(map[string]any)
+	if !ok {
+		t.Fatalf("development = %#v", result["development"])
+	}
+	for _, key := range []string{"repository", "head", "workingTree", "files", "recentCommits", "remote", "github"} {
+		if _, exists := development[key]; !exists {
+			t.Errorf("development missing %q", key)
 		}
 	}
 }

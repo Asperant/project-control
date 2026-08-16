@@ -34,6 +34,7 @@ import {
   agentRunTimelineResponseSchema,
   duplicateAgentRunResponseSchema,
   resumeProjectResponseSchema,
+  developmentStateResponseSchema,
   workSessionAmendmentResponseSchema,
   workSessionListResponseSchema,
   workSessionResponseSchema,
@@ -47,6 +48,7 @@ import {
   type AgentRunTimelineResponse,
   type DuplicateAgentRunResponse,
   type ResumeProjectResponse,
+  type DevelopmentStateResponse,
   type WorkSessionAmendmentResponse,
   type WorkSessionListResponse,
   type WorkSessionListQuery,
@@ -447,6 +449,7 @@ export const api = {
   promoteAgentRunToMemory(projectId:string,runId:string,body:CreateMemoryEntryRequest):Promise<MemoryEntryResponse>{return request(`/api/projects/${projectId}/agent-runs/${runId}/promote-memory`,memoryEntryResponseSchema,{method:'POST',body});},
 
   // --- Resume / Work Sessions ---------------------------------------------------
+  getProjectDevelopment(projectId:string,signal?:AbortSignal):Promise<DevelopmentStateResponse>{return request(`/api/projects/${projectId}/development`,developmentStateResponseSchema,signal?{signal}:{});},
   getProjectResume(projectId:string,signal?:AbortSignal):Promise<ResumeProjectResponse>{return request(`/api/projects/${projectId}/resume`,resumeProjectResponseSchema,signal?{signal}:{});},
   listWorkSessions(projectId:string,query:Partial<WorkSessionListQuery> = {},signal?:AbortSignal):Promise<WorkSessionListResponse>{
     const params=new URLSearchParams();

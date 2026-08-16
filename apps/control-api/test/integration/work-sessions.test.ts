@@ -204,7 +204,7 @@ describe.skipIf(!hasDocker)('Work Sessions', () => {
     expect(visible.goal).toBe('Ship the next safe increment');
   });
 
-  it('creates and links a v2 checkpoint atomically when closing', async () => {
+  it('creates and links a v3 checkpoint atomically when closing', async () => {
     const projectId = await project();
     const session = await start(projectId);
     const response = await request('POST', `/api/projects/${projectId}/work-sessions/${session.id}/close`, {
@@ -216,7 +216,8 @@ describe.skipIf(!hasDocker)('Work Sessions', () => {
     const closed = response.json().workSession;
     expect(closed.checkpointId).toBeTruthy();
     const checkpoint = (await request('GET', `/api/projects/${projectId}/checkpoints/${closed.checkpointId}`)).json().checkpoint;
-    expect(checkpoint.snapshotVersion).toBe(2);
+    expect(checkpoint.snapshotVersion).toBe(3);
+    expect(checkpoint.snapshot.gitState.status).toBe('unavailable');
     expect(checkpoint.sessionNote).toBe('Session close checkpoint');
   });
 
@@ -246,6 +247,7 @@ describe.skipIf(!hasDocker)('Work Sessions', () => {
         async (_client, eventType) => {
           if (eventType === 'work_session.closed') throw new Error('audit unavailable');
         },
+        harness.ctx.runner,
       ),
     ).rejects.toThrow('audit unavailable');
     const stored = await harness.ctx.db.query<{ status: string; checkpoint_id: string | null }>(

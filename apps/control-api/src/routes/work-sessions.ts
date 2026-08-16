@@ -83,7 +83,7 @@ export const workSessionRoutes = (ctx: AppContext): FastifyPluginAsync => async 
     const body = parse(closeWorkSessionRequestSchema, request.body);
     return reply.send({
       workSession: await closeWorkSession(
-        ctx.db, projectId!, sessionId!, request.auth!.user.id, body, auditFor(request),
+        ctx.db, projectId!, sessionId!, request.auth!.user.id, body, auditFor(request), ctx.runner, String(request.id),
       ),
     });
   });

@@ -10,6 +10,8 @@ import {
   selectCurrentFocusTask, selectRecommendedRoadmapAction, type ResumeTaskCandidate,
   isVisibleResumeWork,
 } from './selector.js';
+import type { RunnerClient } from '../runner/client.js';
+import { getProjectDevelopment } from '../development/service.js';
 
 type CandidateRow = {
   id: string;
@@ -99,8 +101,10 @@ function workItem(task: {
   };
 }
 
-export async function getProjectResume(db: Executor, projectId: string): Promise<ResumeProjectResponse> {
-  const [project, context, candidates, activeWorkSession, lastSession, history, allMemory, agentAttention] = await Promise.all([
+export async function getProjectResume(
+  db: Executor, runner: RunnerClient, projectId: string, requestId?: string,
+): Promise<ResumeProjectResponse> {
+  const [project, context, candidates, activeWorkSession, lastSession, history, allMemory, agentAttention, development] = await Promise.all([
     getProjectGuard(db, projectId),
     getProjectContext(db, projectId),
     loadResumeCandidates(db, projectId),
@@ -109,6 +113,7 @@ export async function getProjectResume(db: Executor, projectId: string): Promise
     listWorkSessions(db, projectId, { page: 1, pageSize: 20, status: 'closed' }),
     listMemory(db, projectId, {}),
     loadAgentAttention(db, projectId),
+    getProjectDevelopment(db, runner, projectId, requestId),
   ]);
 
   const roadmapFocus = selectCurrentFocusTask(candidates);
@@ -133,10 +138,14 @@ export async function getProjectResume(db: Executor, projectId: string): Promise
   if (agentAttention.awaiting_validation) items.push({ key: 'agent_runs_awaiting_validation', count: agentAttention.awaiting_validation, label: `${agentAttention.awaiting_validation} Agent Run${agentAttention.awaiting_validation === 1 ? '' : 's'} awaiting validation` });
   if (agentAttention.failed) items.push({ key: 'failed_agent_runs', count: agentAttention.failed, label: `${agentAttention.failed} failed Agent Run${agentAttention.failed === 1 ? '' : 's'}` });
   if (openSessionHasBlockers) items.push({ key: 'open_session_blockers', count: 1, label: 'The open Work Session has recorded blockers' });
+  items.push(...development.attention);
+
+  const { projectId: _developmentProjectId, files: _files, filesTruncated: _filesTruncated, recentCommits: _recentCommits, ...developmentState } = development;
 
   return {
     projectId,
     readOnly: project.status === 'archived',
+    developmentState,
     currentFocus,
     recommendedNextAction: selectRecommendedRoadmapAction(candidates),
     attentionRequired: {

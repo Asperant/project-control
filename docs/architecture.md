@@ -15,12 +15,13 @@ n8n, and Git are outside this data path. See [manual-roadmap.md](manual-roadmap.
 `GET /api/projects/:projectId/resume` composes a read-only operational view in
 the Control API. React renders that response and never reselects the recommended
 roadmap action. The composer reuses Current Context (including the accepted
-`recentAgentWork` loader), current memory, roadmap state and Work Session reads;
-it makes no LLM, runner, Git, n8n or filesystem call.
+`recentAgentWork` loader), current memory, roadmap state and Work Session reads.
+It adds the compact read-only Development service result without changing
+roadmap selection. It makes no LLM or n8n call.
 
 Work Session mutations use the existing project guard and append-only audit
-transaction pattern. Closing with a checkpoint builds the current deterministic
-v2 checkpoint snapshot, inserts it, links it to the session and writes required
+transaction pattern. Closing with a checkpoint first captures best-effort Git
+metadata, then builds the deterministic v3 snapshot, inserts it, links it to the session and writes required
 audit events within one PostgreSQL transaction. Any failure rolls back all
 effects. Closed rows remain immutable; corrections are separate, append-only
 `work_session_amendments` rows. See
@@ -144,14 +145,14 @@ Design constraints, all enforced rather than documented-only:
 Stage 1 operations: `system.health`, `runner.selftest`. Both read-only.
 
 Project-registration operations: `project.path.validate`, `project.inspect`,
-`project.git.summary`. All read-only, and all gated by the same
+`project.git.summary`, `project.git.development`. All read-only, and all gated by the same
 `internal/projectpath` check — a caller-supplied path is only ever resolved
 against a fixed, root-owned list of allowed roots (see
 `config/allowed-project-roots.conf` and the systemd drop-in below), never
 against caller-supplied roots.
 
 **The one exception to "no execution path" is `git`**, invoked by
-`project.inspect`/`project.git.summary` with a fixed, hardcoded argv per
+`project.inspect`/`project.git.summary`/`project.git.development` with a fixed, hardcoded argv per
 subcommand and only against a directory `internal/projectpath` has already
 validated. `internal/gitinfo`'s package doc explains why this is the safer
 choice over a from-scratch reimplementation of `git status` (which would mean
@@ -293,6 +294,10 @@ cross-project checkpoint links. Lifecycle and mutation triggers protect open
 field rules, closed history and closed-parent-only amendments; grants deny
 physical deletion and make amendments append-only for `control_app` while
 `backup_reader` remains SELECT-only.
+
+Development State adds no table or migration. Live Git metadata is not cached
+in PostgreSQL; only compact Git state is persisted inside new immutable
+checkpoint v3 JSON. Historical v1/v2 rows remain untouched.
 
 Migrations are checksum-verified: editing an applied migration aborts start-up
 rather than letting the recorded history diverge from the live schema. A

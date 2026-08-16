@@ -187,6 +187,55 @@ describe.skipIf(!hasDocker || !hasGo)('project registration', () => {
       expect(project.status).toBe('active');
     });
 
+    it('serves live Development metadata and stores the same compact Git state in a v3 checkpoint', async () => {
+      const dir = await makeFixture('development-demo', { 'README.md': 'clean\n' });
+      await gitInit(dir);
+      await exec('git', ['remote', 'add', 'origin', 'https://github.com/example/development-demo.git'], { cwd: dir });
+      const auth = await authenticate();
+      const inspection = await harness.app.inject({
+        method: 'POST', url: '/api/projects/inspections', payload: { path: dir }, ...authed(auth),
+      });
+      const created = await harness.app.inject({
+        method: 'POST', url: '/api/projects', payload: { inspectionId: inspection.json().inspectionId, name: 'Development Demo' }, ...authed(auth),
+      });
+      const projectId = created.json().project.id as string;
+
+      const clean = await harness.app.inject({ method: 'GET', url: `/api/projects/${projectId}/development`, ...authed(auth) });
+      expect(clean.statusCode).toBe(200);
+      expect(clean.json()).toMatchObject({
+        status: 'available', head: { branch: 'main', detached: false },
+        workingTree: { clean: true, totalChangedCount: 0 },
+        remote: { normalizedHost: 'github.com', owner: 'example', repository: 'development-demo' },
+        github: { detected: true, configured: false, status: 'not_configured' },
+      });
+
+      const checkpointResponse = await harness.app.inject({
+        method: 'POST', url: `/api/projects/${projectId}/checkpoints`, payload: {}, ...authed(auth),
+      });
+      expect(checkpointResponse.statusCode).toBe(201);
+      const checkpoint = checkpointResponse.json().checkpoint;
+      expect(checkpoint.snapshotVersion).toBe(3);
+      expect(checkpoint.snapshot.gitState).toMatchObject({ status: 'available', branch: 'main', dirty: false });
+      expect(JSON.stringify(checkpoint.snapshot.gitState)).not.toContain('README.md');
+
+      await writeFile(path.join(dir, 'README.md'), 'dirty\n', 'utf8');
+      const dirty = await harness.app.inject({ method: 'GET', url: `/api/projects/${projectId}/development`, ...authed(auth) });
+      expect(dirty.json()).toMatchObject({
+        status: 'available', workingTree: { clean: false, unstagedCount: 1, totalChangedCount: 1 },
+        checkpointComparison: { status: 'compared', sameHead: true, headChanged: false, workingTreeChanged: true },
+      });
+      expect(dirty.json().files).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: 'README.md', unstaged: true }),
+      ]));
+
+      const resumed = await harness.app.inject({ method: 'GET', url: `/api/projects/${projectId}/resume`, ...authed(auth) });
+      expect(resumed.statusCode).toBe(200);
+      expect(resumed.json()).toMatchObject({
+        developmentState: { status: 'available', workingTree: { clean: false } },
+        recommendedNextAction: { kind: 'none_pending' },
+      });
+    });
+
     it('rejects creating a project from an already-used inspection', async () => {
       const dir = await makeFixture('double-use-demo');
       const auth = await authenticate();

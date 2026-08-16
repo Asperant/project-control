@@ -1,4 +1,4 @@
-import type { CheckpointSnapshot, RoadmapPriority, RoadmapStatus } from '@project-control/contracts';
+import type { CheckpointGitState, CheckpointSnapshot, RoadmapPriority, RoadmapStatus } from '@project-control/contracts';
 import type { Executor } from '../projects/guard.js';
 import { loadRecentAgentActivity } from '../agent-runs/snapshot.js';
 
@@ -152,7 +152,7 @@ export async function loadImportantMemorySnapshot(db: Executor, projectId: strin
 }
 
 export async function buildCheckpointSnapshot(
-  db: Executor, projectId: string, project: { name: string; status: string },
+  db: Executor, projectId: string, project: { name: string; status: string }, gitState: CheckpointGitState,
 ): Promise<CheckpointSnapshot> {
   // Sequential for the same reason as loadRawProjectData: a transaction
   // client cannot run overlapping queries.
@@ -164,7 +164,8 @@ export async function buildCheckpointSnapshot(
   const recentAgentActivity = await loadRecentAgentActivity(db, projectId, RECENT_AGENT_ACTIVITY_LIMIT);
 
   return {
-    version: 2,
+    version: 3,
+    gitState,
     recentAgentActivity,
     projectId,
     projectName: project.name,

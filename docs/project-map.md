@@ -14,13 +14,16 @@
   roadmap selection policy stays server-side.
 - `apps/control-api/src/work-sessions/`: Work Session lifecycle, append-only
   corrections, and atomic checkpoint-on-close transactions.
+- `apps/control-api/src/development/`: live read-only Git composition,
+  checkpoint comparison and compact checkpoint capture.
 - `apps/control-api/src/projects/guard.ts`: shared project-guard/archive-lock
   helper reused by roadmap, memory, checkpoints and Work Sessions.
 - `apps/web/src/components/projects/`: project registration/detail UI.
 - `apps/web/src/components/roadmap/`: manual roadmap UI.
 - `apps/web/src/components/memory/`: manual project memory and checkpoint UI.
 - `apps/runner/`: confined read-only inspection runner; never a roadmap or
-  memory path.
+  memory mutation path. `project.git.development` is typed; no generic Git
+  command interface exists.
 - `scripts/`: install/update/backup/restore/verify operations.
 
 High-risk areas are migrations/role grants, auth/CSRF, append-only audit,

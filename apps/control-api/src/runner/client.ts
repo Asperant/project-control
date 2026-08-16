@@ -20,6 +20,7 @@ export const runnerOperationSchema = z.enum([
   'project.path.validate',
   'project.inspect',
   'project.git.summary',
+  'project.git.development',
 ]);
 export type RunnerOperation = z.infer<typeof runnerOperationSchema>;
 

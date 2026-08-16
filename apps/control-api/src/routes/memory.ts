@@ -98,7 +98,9 @@ export const memoryRoutes = (ctx: AppContext): FastifyPluginAsync => async (app)
   app.post('/api/projects/:projectId/checkpoints', { preHandler: requireWriter }, async (request, reply) => {
     const { projectId } = ids(request);
     const body = parse(createCheckpointRequestSchema, request.body ?? {});
-    const checkpoint = await createCheckpoint(ctx.db, projectId!, request.auth!.user.id, body.sessionNote, auditFor(request));
+    const checkpoint = await createCheckpoint(
+      ctx.db, projectId!, request.auth!.user.id, body.sessionNote, auditFor(request), ctx.runner, String(request.id),
+    );
     return reply.code(201).send({ checkpoint });
   });
   app.post('/api/projects/:projectId/checkpoints/:checkpointId/archive', { preHandler: requireWriter }, async (request, reply) => {

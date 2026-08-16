@@ -54,6 +54,29 @@ describe.skipIf(!hasDocker)('immutable checkpoints', () => {
     expect((await harness.app.inject({ method: 'GET', url: `/api/projects/${id}/checkpoints` })).statusCode).toBe(401);
   });
 
+  it('keeps Development reads authenticated, audit-quiet, archived-readable, and safely unavailable', async () => {
+    const id = await project();
+    expect((await harness.app.inject({ method: 'GET', url: `/api/projects/${id}/development` })).statusCode).toBe(401);
+    const before = await harness.ctx.db.query<{ count: number }>(
+      'SELECT count(*)::int count FROM audit_events WHERE subject=$1', [`project:${id}`],
+    );
+    const active = await request('GET', `/api/projects/${id}/development`);
+    expect(active.statusCode).toBe(200);
+    expect(active.json()).toMatchObject({
+      projectId: id, status: 'unavailable', errorCode: 'runner_unavailable',
+      files: [], recentCommits: [], checkpointComparison: { status: 'no_git_checkpoint' },
+    });
+    const after = await harness.ctx.db.query<{ count: number }>(
+      'SELECT count(*)::int count FROM audit_events WHERE subject=$1', [`project:${id}`],
+    );
+    expect(after.rows[0]?.count).toBe(before.rows[0]?.count);
+
+    await request('POST', `/api/projects/${id}/archive`);
+    const archived = await request('GET', `/api/projects/${id}/development`);
+    expect(archived.statusCode).toBe(200);
+    expect(archived.json().status).toBe('unavailable');
+  });
+
   it('creates a server-generated snapshot, ignores any client-supplied snapshot content, and sets the version', async () => {
     const id = await project();
     const response = await request('POST', `/api/projects/${id}/checkpoints`, {
@@ -68,12 +91,18 @@ describe.skipIf(!hasDocker)('immutable checkpoints', () => {
     expect(clean.statusCode).toBe(201);
     const { checkpoint } = clean.json();
     expect(checkpoint.sessionNote).toBe('Roadmap side finished.');
-    // New checkpoints are always written as v2 (adds recentAgentActivity).
-    expect(checkpoint.snapshotVersion).toBe(2);
-    expect(checkpoint.snapshot.version).toBe(2);
+    // New checkpoints are v3; runner failure is captured compactly and never
+    // blocks the otherwise valid checkpoint transaction.
+    expect(checkpoint.snapshotVersion).toBe(3);
+    expect(checkpoint.snapshot.version).toBe(3);
     expect(checkpoint.snapshot.projectId).toBe(id);
     expect(checkpoint.snapshot).not.toHaveProperty('forged');
     expect(checkpoint.snapshot.recentAgentActivity).toEqual([]);
+    expect(checkpoint.snapshot.gitState).toMatchObject({
+      status: 'unavailable', branch: null, headSha: null, dirty: false,
+    });
+    expect(checkpoint.snapshot.gitState).not.toHaveProperty('files');
+    expect(checkpoint.snapshot.gitState).not.toHaveProperty('diff');
   });
 
   it('still reads a v1-shaped checkpoint row (no recentAgentActivity key) written before this feature existed', async () => {
@@ -96,6 +125,25 @@ describe.skipIf(!hasDocker)('immutable checkpoints', () => {
     expect(detail.snapshotVersion).toBe(1);
     expect(detail.snapshot.version).toBe(1);
     expect(detail.snapshot).not.toHaveProperty('recentAgentActivity');
+  });
+
+  it('still reads a v2 checkpoint without Git state', async () => {
+    const id = await project();
+    const snapshot = {
+      version: 2, projectId: id, projectName: 'V2 project', projectStatus: 'active', generatedAt: new Date().toISOString(),
+      currentFocus: [], inProgressTasks: [], blockedMilestones: [], blockedTasks: [], nextActions: [],
+      pendingAcceptance: [], unresolvedDependencies: [], recentlyCompletedTasks: [], pinnedMemory: [], importantMemory: [],
+      recentAgentActivity: [],
+    };
+    const checkpointId = randomUUID();
+    await harness.ctx.db.query(
+      'INSERT INTO project_checkpoints (id,project_id,snapshot_version,snapshot_json) VALUES ($1,$2,2,$3::jsonb)',
+      [checkpointId, id, JSON.stringify(snapshot)],
+    );
+    const detail = (await request('GET', `/api/projects/${id}/checkpoints/${checkpointId}`)).json().checkpoint;
+    expect(detail.snapshotVersion).toBe(2);
+    expect(detail.snapshot.version).toBe(2);
+    expect(detail.snapshot).not.toHaveProperty('gitState');
   });
 
   it('includes recent, non-draft, non-archived Agent Run activity in the snapshot, newest first, capped at 5, with no prompt/report body', async () => {

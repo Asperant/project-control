@@ -21,6 +21,7 @@ describe('Work Session and Resume contracts', () => {
     const parsed = resumeProjectResponseSchema.safeParse({
       projectId: '00000000-0000-4000-8000-000000000001',
       readOnly: false,
+      developmentState: resumeDevelopmentState(),
       currentFocus: { kind: 'none', message: 'No focus' },
       recommendedNextAction: { kind: 'none_pending', message: 'No action' },
       attentionRequired: {
@@ -63,11 +64,25 @@ function workSessionForContract(overrides: Record<string, unknown> = {}): any {
 function baseResumeResponse(): any {
   return {
     projectId: '00000000-0000-4000-8000-000000000001', readOnly: false,
+    developmentState: resumeDevelopmentState(),
     currentFocus: { kind: 'none', message: 'No focus' }, recommendedNextAction: { kind: 'none_pending', message: 'No action' },
     attentionRequired: { blockedTaskCount: 0, unresolvedDependencyCount: 0, incompleteAcceptanceCount: 0, agentRunsAwaitingValidationCount: 0, failedAgentRunCount: 0, openSessionHasBlockers: false, items: [] },
     activeWorkSession: null, lastSession: null, lastCheckpoint: null,
     changesSinceCheckpoint: { hasCheckpoint: false, sinceCheckpointId: null, sinceCreatedAt: null, items: [] },
     activeAndBlockedWork: { active: [], blocked: [] }, recentAgentWork: [], importantMemory: [],
     workSessionHistory: { workSessions: [], page: 1, pageSize: 20, total: 0, nextCursor: null },
+  };
+}
+
+function resumeDevelopmentState(): any {
+  return {
+    status: 'not_repository', errorCode: null,
+    repository: { available: true, isRepository: false },
+    head: { sha: null, shortSha: null, branch: null, detached: false, unborn: false },
+    workingTree: { clean: null, stagedCount: 0, unstagedCount: 0, untrackedCount: 0, conflictedCount: 0, totalChangedCount: 0 },
+    remote: null,
+    github: { detected: false, configured: false, status: 'unsupported' },
+    checkpointComparison: { status: 'no_git_checkpoint' },
+    attention: [{ key: 'repository_not_detected', label: 'Not a Git repository', count: 1 }],
   };
 }

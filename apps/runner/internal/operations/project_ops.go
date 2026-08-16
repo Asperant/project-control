@@ -98,6 +98,32 @@ func projectGitSummary(cfg Config) registry.Handler {
 	}
 }
 
+// projectGitDevelopment implements the narrowly typed, read-only
+// `project.git.development` operation. Git failures are represented in the
+// returned machine model so an observational problem does not become a runner
+// transport failure.
+func projectGitDevelopment(cfg Config) registry.Handler {
+	return func(ctx context.Context, params map[string]any) (map[string]any, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		validated, verr := projectpath.Validate(cfg.AllowedProjectRoots, pathParam(params))
+		if verr != nil {
+			return map[string]any{"valid": false, "reason": validationReason(verr)}, nil
+		}
+		development, err := gitinfo.InspectDevelopment(ctx, validated.Canonical)
+		if err != nil {
+			return nil, fmt.Errorf("git development inspection failed: %w", err)
+		}
+		return map[string]any{
+			"valid":         true,
+			"canonicalPath": validated.Canonical,
+			"allowedRoot":   validated.Root,
+			"development":   gitDevelopmentToMap(development),
+		}, nil
+	}
+}
+
 // projectInspect implements `project.inspect`: path validation, git summary
 // and manifest/technology detection in one bounded pass.
 func projectInspect(cfg Config) registry.Handler {
@@ -187,6 +213,59 @@ func gitSummaryToMap(s gitinfo.Summary) map[string]any {
 		"modifiedCount":           s.ModifiedCount,
 		"untrackedCount":          s.UntrackedCount,
 	}
+}
+
+func gitDevelopmentToMap(d gitinfo.Development) map[string]any {
+	files := make([]any, 0, len(d.Files))
+	for _, f := range d.Files {
+		files = append(files, map[string]any{
+			"path": f.Path, "oldPath": nullableString(f.OldPath), "state": f.State,
+			"staged": f.Staged, "unstaged": f.Unstaged, "untracked": f.Untracked,
+		})
+	}
+	commits := make([]any, 0, len(d.RecentCommits))
+	for _, c := range d.RecentCommits {
+		commits = append(commits, map[string]any{
+			"sha": c.SHA, "shortSha": c.ShortSHA, "subject": c.Subject,
+			"authorName": c.AuthorName, "authoredAt": c.AuthoredAt,
+		})
+	}
+	var remote any
+	if d.Remote != nil {
+		remote = map[string]any{
+			"name": d.Remote.Name, "rawUrl": nullableString(d.Remote.RawURL),
+			"host": nullableString(d.Remote.Host), "owner": nullableString(d.Remote.Owner),
+			"repository":     nullableString(d.Remote.Repository),
+			"trackingBranch": nullableString(d.Remote.TrackingBranch),
+			"ahead":          d.Remote.Ahead, "behind": d.Remote.Behind,
+			"comparisonBasis": d.Remote.ComparisonBasis,
+		}
+	}
+	return map[string]any{
+		"repository": map[string]any{
+			"available": d.Repository.Available, "isRepository": d.Repository.IsRepository,
+			"errorCode": nullableString(d.Repository.ErrorCode),
+		},
+		"head": map[string]any{
+			"sha": nullableString(d.Head.SHA), "shortSha": nullableString(d.Head.ShortSHA),
+			"branch": nullableString(d.Head.Branch), "detached": d.Head.Detached, "unborn": d.Head.Unborn,
+		},
+		"workingTree": map[string]any{
+			"clean": d.WorkingTree.Clean, "stagedCount": d.WorkingTree.StagedCount,
+			"unstagedCount": d.WorkingTree.UnstagedCount, "untrackedCount": d.WorkingTree.UntrackedCount,
+			"conflictedCount": d.WorkingTree.ConflictedCount, "totalChangedCount": d.WorkingTree.TotalChangedCount,
+			"filesTruncated": d.WorkingTree.FilesTruncated,
+		},
+		"files": files, "recentCommits": commits, "remote": remote,
+		"github": map[string]any{"detected": d.GitHub.Detected, "configured": d.GitHub.Configured, "status": d.GitHub.Status},
+	}
+}
+
+func nullableString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 func toAnySlice(in []string) []any {

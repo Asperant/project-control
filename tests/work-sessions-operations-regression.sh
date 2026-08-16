@@ -37,7 +37,7 @@ grep -q "work_sessions_one_open_per_project_idx" "$RESTORE" \
   || fail "restore does not validate the one-open-session index"
 grep -q "cross_project_checkpoints" "$RESTORE" \
   || fail "restore does not validate same-project checkpoint linkage"
-grep -q "checkpoint v1/v2 compatibility" "$RESTORE" \
-  || fail "restore does not report checkpoint v1/v2 compatibility"
+grep -q "checkpoint v1/v2/v3 compatibility" "$RESTORE" \
+  || fail "restore does not report checkpoint v1/v2/v3 compatibility"
 
 printf 'PASS: Work Session verify/security/restore operational coverage is present\n'

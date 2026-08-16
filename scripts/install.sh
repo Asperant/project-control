@@ -354,6 +354,9 @@ done
 
 log_ok "configuration installed"
 
+install_file "${PC_REPO_ROOT}/config/checkpoint-reader-max-version" \
+             "${PC_ROOT}/config/checkpoint-reader-max-version" 0644
+
 # -----------------------------------------------------------------------------
 log_step "6/9  Building images and the runner binary"
 # -----------------------------------------------------------------------------
@@ -364,7 +367,12 @@ else
 fi
 
 # Install the runner binary.
+runner_binary_changed=0
 if [[ -f "${PC_REPO_ROOT}/apps/runner/bin/project-control-runner" ]]; then
+  if [[ ! -f "${PC_ROOT}/runner/bin/project-control-runner" ]] \
+     || ! cmp -s "${PC_REPO_ROOT}/apps/runner/bin/project-control-runner" "${PC_ROOT}/runner/bin/project-control-runner"; then
+    runner_binary_changed=1
+  fi
   install_file "${PC_REPO_ROOT}/apps/runner/bin/project-control-runner" \
                "${PC_ROOT}/runner/bin/project-control-runner" 0750
   chown "${RUNNER_UID}:${RUNNER_GID}" "${PC_ROOT}/runner/bin/project-control-runner"
@@ -411,7 +419,7 @@ fi
 # actually take effect on a host that is being re-installed rather than
 # installed fresh.
 if systemctl is-active --quiet project-control-runner.service \
-   && { (( units_changed )) || (( runner_dropin_changed )); }; then
+   && { (( units_changed )) || (( runner_dropin_changed )) || (( runner_binary_changed )); }; then
   systemctl restart project-control-runner.service
   log_ok "restarted project-control-runner.service to apply configuration changes"
 fi
@@ -419,16 +427,11 @@ fi
 # The runner must be up before the Control API container starts, because the
 # socket it mounts has to exist.
 systemctl enable --now project-control-runner.service
-sleep 2
-if systemctl is-active --quiet project-control-runner.service; then
+if wait_for_runner_ready; then
   log_ok "project-control-runner.service is running"
 else
-  log_error "runner failed to start; inspect: journalctl -u project-control-runner -n 50"
+  log_error "runner failed readiness; inspect: journalctl -u project-control-runner -n 50"
   exit 1
-fi
-
-if [[ ! -S "$PC_RUNNER_SOCKET" ]]; then
-  die "runner socket ${PC_RUNNER_SOCKET} was not created"
 fi
 socket_mode="$(stat -c '%a' "$PC_RUNNER_SOCKET")"
 socket_group="$(stat -c '%G' "$PC_RUNNER_SOCKET")"
@@ -466,7 +469,7 @@ if (( ${#ALLOWED_ROOTS[@]} > 0 )); then
   else
     log_warn "allowed-roots bind mount not yet visible in the runner's namespace; restarting once to apply"
     systemctl restart project-control-runner.service
-    sleep 2
+    wait_for_runner_ready || die "runner failed readiness after applying allowed-roots configuration"
     if verify_allowed_root_mounts; then
       log_ok "allowed-roots bind mount(s) verified read-only in the runner's live mount namespace after restart"
     else

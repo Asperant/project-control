@@ -33,6 +33,17 @@ function formatElapsed(startedAt: string, now: number): string {
   return `${hours}h ${minutes % 60}m`;
 }
 
+function developmentComparisonLines(value: ResumeProjectResponse['developmentState']['checkpointComparison']): string[] {
+  if (value.status === 'no_git_checkpoint') return ['No Git-aware checkpoint exists yet.'];
+  if (value.status === 'unavailable') return ['Comparison with the last Git-aware checkpoint is unavailable.'];
+  const lines: string[] = [];
+  if (value.headChanged !== null) lines.push(value.headChanged ? 'HEAD changed.' : 'HEAD unchanged.');
+  if (value.branchChanged !== null) lines.push(value.branchChanged ? 'Branch changed.' : 'Branch unchanged.');
+  if (value.workingTreeChanged !== null) lines.push(value.workingTreeChanged ? 'Working tree state changed.' : 'Working tree state unchanged.');
+  if (value.repositoryStateChanged) lines.push('Repository state changed.');
+  return lines;
+}
+
 function SessionDetails({ session, onOpenMemory }: { session: WorkSession; onOpenMemory: (checkpointId?: string) => void }): React.JSX.Element {
   return (
     <div className="resume-session-details">
@@ -323,8 +334,21 @@ export function ResumeView({ projectId, canWrite, archived, onSessionExpired, on
             : <ul className="resume-list">{resume.changesSinceCheckpoint.items.map((item) => <li key={item.key}>{item.label}</li>)}</ul>}
       </section>
 
+      <section className="card" aria-labelledby="resume-development">
+        <h3 id="resume-development">8. Development State</h3>
+        {resume.developmentState.status === 'unavailable' ? <p className="hint">Git inspection is unavailable. Project continuity remains available.</p>
+          : resume.developmentState.status === 'not_repository' ? <p className="hint">The registered folder is not currently a Git repository.</p>
+            : <>
+              <p className="resume-copy"><strong>{resume.developmentState.head.detached ? 'Detached HEAD' : resume.developmentState.head.branch ?? 'Unborn branch'}</strong> · <code>{resume.developmentState.head.shortSha ?? 'no commit'}</code></p>
+              <p className="card-meta">Working tree: {resume.developmentState.workingTree.clean ? 'Clean' : `Dirty — ${resume.developmentState.workingTree.totalChangedCount} changed file${resume.developmentState.workingTree.totalChangedCount === 1 ? '' : 's'}`}</p>
+              <strong>Since last Git-aware checkpoint</strong>
+              <ul className="resume-list">{developmentComparisonLines(resume.developmentState.checkpointComparison).map((line) => <li key={line}>{line}</li>)}</ul>
+              <ul className="resume-list">{resume.developmentState.attention.map((item) => <li key={item.key}>{item.label}</li>)}</ul>
+            </>}
+      </section>
+
       <section className="card" aria-labelledby="resume-work">
-        <h3 id="resume-work">8. Active / Blocked Work</h3>
+        <h3 id="resume-work">9. Active / Blocked Work</h3>
         {resume.activeAndBlockedWork.active.length === 0 && resume.activeAndBlockedWork.blocked.length === 0 ? <p className="hint">No active or blocked roadmap work.</p> : (
           <div className="resume-columns">
             <div><strong>Active</strong>{resume.activeAndBlockedWork.active.length === 0 ? <p className="hint">None.</p> : <ul className="resume-list">{resume.activeAndBlockedWork.active.map((item) => <li key={item.taskId}><span>{item.title}</span><small>{item.milestoneTitle} · {item.nextAction}</small></li>)}</ul>}</div>
@@ -334,17 +358,17 @@ export function ResumeView({ projectId, canWrite, archived, onSessionExpired, on
       </section>
 
       <section className="card" aria-labelledby="resume-agent-work">
-        <h3 id="resume-agent-work">9. Recent Agent Work</h3>
+        <h3 id="resume-agent-work">10. Recent Agent Work</h3>
         {resume.recentAgentWork.length === 0 ? <p className="hint">No recent Agent Run activity.</p> : <ul className="resume-list">{resume.recentAgentWork.map((run) => <li key={run.agentRunId}><span><strong>{run.agentName}</strong> · {run.title}</span><small>{run.status} · {run.validationStatus.replaceAll('_', ' ')} · {formatTimestamp(run.activityAt)}</small></li>)}</ul>}
       </section>
 
       <section className="card" aria-labelledby="resume-memory">
-        <h3 id="resume-memory">10. Important Memory</h3>
+        <h3 id="resume-memory">11. Important Memory</h3>
         {resume.importantMemory.length === 0 ? <p className="hint">No current pinned or important memory.</p> : <ul className="resume-list">{resume.importantMemory.map((entry) => <li key={entry.id}><span><strong>{entry.title}</strong> · {entry.type}</span><small>{entry.isPinned ? 'Pinned · ' : ''}{entry.importance}</small><p>{entry.body}</p></li>)}</ul>}
       </section>
 
       <section className="card" aria-labelledby="resume-history">
-        <h3 id="resume-history">11. Work Session History</h3>
+        <h3 id="resume-history">12. Work Session History</h3>
         {history.length === 0 ? <p className="hint">No completed work sessions yet.</p> : (
           <ol className="resume-history">{history.map((session) => <li key={session.id}><SessionDetails session={session} onOpenMemory={onOpenMemory} />{!readOnly && session.status === 'closed' && <button type="button" onClick={() => openAmendment(session)}>Add correction</button>}</li>)}</ol>
         )}

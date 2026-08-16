@@ -446,6 +446,21 @@ else
   record_check FAIL API-012 "Work Session endpoint is not routed through Caddy" ""
 fi
 
+checkpoint_reader_max="$(cat "${PC_CONFIG_DIR}/checkpoint-reader-max-version" 2>/dev/null || true)"
+if [[ ! "$checkpoint_reader_max" =~ ^[1-9][0-9]*$ ]]; then
+  record_check FAIL API-013 "Development State capability metadata is invalid" "${PC_CONFIG_DIR}/checkpoint-reader-max-version"
+elif (( checkpoint_reader_max < 3 )); then
+  record_check SKIP API-013 "Development State endpoint is not part of this rollback target" "reader capability v${checkpoint_reader_max}"
+elif code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "${PORTAL}/api/projects/${ROADMAP_VERIFY_PROJECT}/development" 2>/dev/null)"; then
+  if [[ "$code" == "401" ]]; then
+    record_check PASS API-013 "Development State endpoint requires authentication" "HTTP 401"
+  else
+    record_check FAIL API-013 "Development State endpoint returned HTTP ${code}" "expected 401 for an anonymous request"
+  fi
+else
+  record_check FAIL API-013 "Development State endpoint is not routed through Caddy" ""
+fi
+
 # Health endpoints must NOT be exposed through the proxy.
 code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "${PORTAL}/health/ready" 2>/dev/null || echo 000)"
 if [[ "$code" == "404" ]]; then

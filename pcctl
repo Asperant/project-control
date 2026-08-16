@@ -54,6 +54,8 @@ VERIFICATION
 MAINTENANCE
   update                 Back up, pull pinned images, migrate, health-gate.
   rollback               Return to the previous version lock and images.
+  reconcile-state        Repair deployment metadata to match an already
+                         running, verified-coherent stack. Deploys nothing.
   uninstall              Remove the stack. Data is KEPT unless --delete-data.
 
 ENVIRONMENT
@@ -110,6 +112,8 @@ case "$command" in
                           run_script update.sh "$@" ;;
   rollback)               require_root_for rollback
                           run_script rollback.sh "$@" ;;
+  reconcile-state)        require_root_for reconcile-state
+                          run_script reconcile-state.sh "$@" ;;
   uninstall)              require_root_for uninstall
                           run_script uninstall.sh "$@" ;;
 

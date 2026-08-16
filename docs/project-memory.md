@@ -86,7 +86,9 @@ audited (`checkpoint.archived`).
 
 `snapshot_version` is stored on every row so the API can keep reading older
 checkpoints if the snapshot's internal shape ever changes. New checkpoints use
-format `2`; existing format `1` checkpoints remain readable and unchanged.
+format `3`, adding compact metadata-only Git state. Existing formats `1` and
+`2` remain readable and unchanged; v3 stores no file list, diff, source body,
+raw remote URL or commit history.
 
 Two "Save checkpoint" clicks in quick succession, or two operators saving at
 once, cannot corrupt anything: creation locks the project row for the
@@ -190,9 +192,9 @@ Resume is a separate operational briefing rather than a renamed Current
 Context card. It reuses Current Context/checkpoint facts, then adds an explicit
 work focus, deterministic recommended action, attention summary, current/last
 session and paginated session history. Work Session close may create and link a
-checkpoint atomically. This release continues writing checkpoint snapshot v2;
-it does not add v3 or rewrite historical v1/v2 rows. Full behavior and the
-selection algorithm are documented in
+checkpoint atomically. Development State advances new writes to checkpoint v3
+without rewriting historical v1/v2 rows. Full behavior and the selection
+algorithm are documented in
 [work-sessions-resume.md](work-sessions-resume.md).
 
 ## Troubleshooting

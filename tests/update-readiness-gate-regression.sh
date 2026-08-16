@@ -161,6 +161,10 @@ RB="${SCRATCH}/rollback-env"
 FAKE_SCRIPTS="${RB}/scripts"
 mkdir -p "$FAKE_SCRIPTS"
 cp -a "${REPO_ROOT}/scripts/." "$FAKE_SCRIPTS/"
+mkdir -p "${RB}/runtime"
+# Keep the end-to-end runner probe inside the disposable fixture; production's
+# fixed /run path remains non-overridable.
+sed -i "s|^PC_RUNTIME_DIR=.*|PC_RUNTIME_DIR=\"${RB}/runtime\"|" "${FAKE_SCRIPTS}/lib/common.sh"
 
 # Stand-in verify.sh: records only that (and when) it was called — the real
 # verify.sh is intentionally never exercised here, this test is about
@@ -192,11 +196,52 @@ cat >"${FAKE_BIN}/chown" <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
-cat >"${FAKE_BIN}/docker" <<'EOF'
+cat >"${RB}/runner-server.py" <<'PY'
+#!/usr/bin/python3
+import json, os, socket, sys, time
+time.sleep(0.15)
+path = sys.argv[1]
+try:
+    os.unlink(path)
+except FileNotFoundError:
+    pass
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.bind(path)
+s.listen(1)
+c, _ = s.accept()
+req = json.loads(c.makefile("rb").readline())
+c.sendall((json.dumps({"requestId": req["requestId"], "operation": "system.health", "ok": True, "result": {"socketOK": True}}) + "\n").encode())
+c.close(); s.close()
+PY
+chmod +x "${RB}/runner-server.py"
+cat >"${FAKE_BIN}/systemctl" <<'EOF'
 #!/usr/bin/env bash
+case "${1:-}" in
+  restart) "$FAKE_RUNNER_SERVER" "$FAKE_RUNNER_SOCKET" & exit 0 ;;
+  is-active) printf 'active\n'; exit 0 ;;
+esac
 exit 0
 EOF
-chmod +x "${FAKE_BIN}/id" "${FAKE_BIN}/chown" "${FAKE_BIN}/docker"
+cat >"${FAKE_BIN}/docker" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "ps" ]]; then
+  for arg in "$@"; do
+    case "$arg" in
+      label=com.docker.compose.service=*) printf 'cid-%s\n' "${arg##*=}"; exit 0 ;;
+    esac
+  done
+fi
+if [[ "${1:-}" == "inspect" && "${2:-}" == "--format" && "${3:-}" == "{{.Image}}" ]]; then
+  case "${4#cid-}" in
+    postgres) printf 'sha256:%064d\n' 1 ;; n8n) printf 'sha256:%064d\n' 2 ;;
+    control-api) printf 'sha256:%064d\n' 3 ;; web) printf 'sha256:%064d\n' 4 ;;
+    caddy) printf 'sha256:%064d\n' 5 ;;
+  esac
+  exit 0
+fi
+exit 0
+EOF
+chmod +x "${FAKE_BIN}/id" "${FAKE_BIN}/chown" "${FAKE_BIN}/systemctl" "${FAKE_BIN}/docker"
 
 # A scripted queue of 503 then 401: proves the gate actually retries (there is
 # a real interval-length delay) before verify.sh is allowed to run, not just
@@ -213,6 +258,9 @@ cat >"${RB}/infra/versions.lock.env" <<'EOF'
 PC_POSTGRES_IMAGE=postgres@sha256:0000000000000000000000000000000000000000000000000000000000000000
 PC_N8N_IMAGE=n8n@sha256:0000000000000000000000000000000000000000000000000000000000000000
 PC_CADDY_IMAGE=caddy@sha256:0000000000000000000000000000000000000000000000000000000000000000
+PC_CONTROL_API_IMAGE=project-control/control-api:test
+PC_WEB_IMAGE=project-control/web:test
+PC_CADDY_PROXY_IMAGE=project-control/caddy:test
 PC_STACK_VERSION=test
 EOF
 
@@ -221,8 +269,16 @@ SNAP_DIR="${DEPLOY}/backups/rollback/${SNAP_ID}"
 mkdir -p "$SNAP_DIR"
 cp "${RB}/infra/versions.lock.env" "${SNAP_DIR}/versions.lock.env"
 : >"${SNAP_DIR}/compose.yaml"
-: >"${SNAP_DIR}/stack.env"
-: >"${SNAP_DIR}/running-images.env"
+cp "${RB}/infra/versions.lock.env" "${SNAP_DIR}/stack.env"
+printf 'fixture runner\n' >"${SNAP_DIR}/project-control-runner"
+chmod +x "${SNAP_DIR}/project-control-runner"
+cat >"${SNAP_DIR}/running-images.env" <<'EOF'
+postgres=sha256:0000000000000000000000000000000000000000000000000000000000000001
+n8n=sha256:0000000000000000000000000000000000000000000000000000000000000002
+control-api=sha256:0000000000000000000000000000000000000000000000000000000000000003
+web=sha256:0000000000000000000000000000000000000000000000000000000000000004
+caddy=sha256:0000000000000000000000000000000000000000000000000000000000000005
+EOF
 printf '%s\n' "$SNAP_ID" >"${DEPLOY}/backups/rollback/latest"
 
 before="$(date +%s%N)"
@@ -233,7 +289,11 @@ set +e
   export FAKE_CURL_COUNTER_FILE="$ROLLBACK_COUNTER"
   export PC_ROOT="$DEPLOY"
   export PC_ASSUME_YES=1
-  bash "${FAKE_SCRIPTS}/rollback.sh" --auto >"${RB}/stdout" 2>"${RB}/stderr"
+  export FAKE_RUNNER_SOCKET="${RB}/runtime/runner.sock"
+  export FAKE_RUNNER_SERVER="${RB}/runner-server.py"
+  # This isolated fixture has no queryable PostgreSQL; --force explicitly
+  # acknowledges the compatibility gate so this scenario can focus on route readiness.
+  bash "${FAKE_SCRIPTS}/rollback.sh" --auto --force >"${RB}/stdout" 2>"${RB}/stderr"
 )
 ROLLBACK_EXIT=$?
 set -e
@@ -253,6 +313,10 @@ delta_ms=$(( delta_ns / 1000000 ))
 # -0ms gap; a working bounded gate lands at roughly one interval, ~2000ms.
 (( delta_ms >= 1500 )) || fail "verify.sh ran only ${delta_ms}ms after rollback started — it was not gated behind the 503->401 readiness wait"
 grep -q 'API route ready' "${RB}/stderr" || fail "rollback.sh did not report the API route becoming ready"
+grep -q 'runner ready: system.health succeeded' "${RB}/stderr" \
+  || fail "rollback.sh did not wait for the delayed restored runner"
+grep -q 'all five services match the exact rollback image target' "${RB}/stderr" \
+  || fail "rollback.sh did not continue through exact image reconciliation"
 # The readiness message must appear before verification starts.
 gate_line="$(grep -n 'API route ready' "${RB}/stderr" | head -1 | cut -d: -f1)"
 verify_line="$(grep -n 'verification passed after rollback' "${RB}/stderr" | head -1 | cut -d: -f1)"

@@ -67,23 +67,70 @@ fi
 # =============================================================================
 log_step "2/8  Recording the current state for rollback"
 # =============================================================================
-SNAPSHOT_DIR="${ROLLBACK_DIR}/${RUN_ID}"
+# A rollback point is trustworthy only when the deployment it describes is
+# already coherent. Refuse to snapshot the incident state where the restored
+# lock/runner and still-running application images belong to different
+# releases. This gate is intentionally not bypassed by --force.
+log_info "checking pre-update deployment consistency"
+load_versions "${PC_ROOT}/config/versions.lock.env"
+load_stack_env
+[[ -x "${PC_ROOT}/runner/bin/project-control-runner" ]] \
+  || die "current runner binary is missing or not executable; refusing to create a misleading rollback point"
+wait_for_runner_ready \
+  || die "current runner is not ready; recover the deployment before creating a new rollback point"
+runner_binary_matches_live_process "${PC_ROOT}/runner/bin/project-control-runner" \
+  || die "installed runner bytes do not match systemd's live executable; restart and verify the runner before updating"
+deployment_images_match_lock "${PC_ROOT}/config/versions.lock.env" "${PC_ROOT}/config/stack.env" || {
+  log_error "the running containers do not match the deployed version lock"
+  log_error "supported recovery: sudo ./pcctl rollback --list; sudo ./pcctl rollback --id <failed-stage7-update-id>; sudo ./pcctl verify"
+  die "refusing to snapshot an inconsistent deployment; --force cannot bypass this coherence gate"
+}
+log_ok "pre-update deployment is coherent"
+
+SNAPSHOT_DIR="$(mktemp -d "${PC_ROOT}/backups/.rollback-${RUN_ID}.pending.XXXXXXXX")"
 ensure_dir "$SNAPSHOT_DIR" 0700 root root
 
 cp -p "${PC_ROOT}/config/versions.lock.env" "${SNAPSHOT_DIR}/versions.lock.env"
 cp -p "${PC_ROOT}/config/stack.env"         "${SNAPSHOT_DIR}/stack.env"
 cp -p "${PC_ROOT}/compose/compose.yaml"     "${SNAPSHOT_DIR}/compose.yaml"
+if [[ -f "${PC_ROOT}/runner/bin/project-control-runner" ]]; then
+  cp -p "${PC_ROOT}/runner/bin/project-control-runner" "${SNAPSHOT_DIR}/project-control-runner"
+fi
+
+if [[ -f "${PC_ROOT}/config/checkpoint-reader-max-version" ]]; then
+  checkpoint_reader_max="$(cat "${PC_ROOT}/config/checkpoint-reader-max-version")"
+  [[ "$checkpoint_reader_max" =~ ^[1-9][0-9]*$ ]] \
+    || die "deployed checkpoint reader capability is invalid; refusing to publish a rollback point"
+  cp -p "${PC_ROOT}/config/checkpoint-reader-max-version" "${SNAPSHOT_DIR}/checkpoint-reader-max-version"
+else
+  printf '2\n' >"${SNAPSHOT_DIR}/checkpoint-reader-max-version"
+fi
 
 # Record the concrete image IDs currently running. Tags can move; IDs cannot.
+running_images_tmp="$(mktemp "${SNAPSHOT_DIR}/.running-images.XXXXXXXX")"
 {
   printf '# Image ids in use before update %s\n' "$RUN_ID"
   for service in postgres n8n control-api web caddy; do
     cid="$(container_id "$service")"
-    [[ -n "$cid" ]] || continue
+    [[ -n "$cid" ]] || die "container ${service} disappeared while recording the rollback point"
     printf '%s=%s\n' "$service" "$(docker inspect --format '{{.Image}}' "$cid" 2>/dev/null)"
   done
-} >"${SNAPSHOT_DIR}/running-images.env"
+} >"$running_images_tmp"
+validate_snapshot_image_manifest "$running_images_tmp" \
+  || die "could not record a complete rollback image manifest"
+mv -f "$running_images_tmp" "${SNAPSHOT_DIR}/running-images.env"
+running_images_match_snapshot "${SNAPSHOT_DIR}/running-images.env" \
+  || die "deployment changed while its rollback image manifest was being captured"
+deployment_images_match_lock "${PC_ROOT}/config/versions.lock.env" "${PC_ROOT}/config/stack.env" \
+  || die "deployment changed before rollback point publication; no rollback point was published"
 chmod 0600 "${SNAPSHOT_DIR}"/*
+
+# Publish only a fully validated rollback point. A crash during preparation
+# leaves at most a hidden sibling under backups, never a selectable target in
+# rollback --list.
+published_snapshot="${ROLLBACK_DIR}/${RUN_ID}"
+mv "$SNAPSHOT_DIR" "$published_snapshot"
+SNAPSHOT_DIR="$published_snapshot"
 
 # The rollback script reads this pointer.
 printf '%s\n' "$RUN_ID" >"${ROLLBACK_DIR}/latest"
@@ -189,6 +236,7 @@ log_step "6/8  Applying the update"
 install_file "${PC_REPO_ROOT}/infra/versions.lock.env" "${PC_ROOT}/config/versions.lock.env" 0644
 install_file "${PC_REPO_ROOT}/infra/compose/compose.yaml" "${PC_ROOT}/compose/compose.yaml" 0644
 install_file "${PC_REPO_ROOT}/infra/caddy/Caddyfile" "${PC_ROOT}/config/caddy/Caddyfile" 0644
+install_file "${PC_REPO_ROOT}/config/checkpoint-reader-max-version" "${PC_ROOT}/config/checkpoint-reader-max-version" 0644
 for migration in "${PC_REPO_ROOT}"/migrations/*.sql; do
   [[ -f "$migration" ]] && install_file "$migration" "${PC_ROOT}/migrations/$(basename "$migration")" 0644
 done
@@ -200,6 +248,19 @@ install_file "${PC_SCRIPTS_DIR}/lib/common.sh" "${PC_ROOT}/scripts/lib/common.sh
 for doc in "${PC_REPO_ROOT}"/docs/*.md; do
   [[ -f "$doc" ]] && install_file "$doc" "${PC_ROOT}/docs/$(basename "$doc")" 0644
 done
+
+new_runner="${PC_REPO_ROOT}/apps/runner/bin/project-control-runner"
+[[ -f "$new_runner" ]] || die "new runner binary is missing after build"
+install_file "$new_runner" "${PC_ROOT}/runner/bin/project-control-runner" 0750
+chown project-runner:project-control "${PC_ROOT}/runner/bin/project-control-runner"
+if ! systemctl restart project-control-runner.service \
+   || ! wait_for_runner_ready; then
+  log_error "updated runner failed to restart"
+  audit system.update failure '{"stage":"runner_restart"}'
+  rollback_or_require_restore runner_restart || true
+  exit 1
+fi
+log_ok "runner binary installed and service restarted"
 
 # Refresh the image references in stack.env.
 tmp="$(mktemp)"

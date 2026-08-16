@@ -1,9 +1,10 @@
 # Resume Project and Work Sessions
 
 Resume is a deterministic project-continuity briefing. It does not use AI,
-semantic search, embeddings, Git inspection, the runner or n8n. The server owns
-all selection policy; the web client renders the API response without choosing
-a different next action.
+semantic search, embeddings or n8n. It includes a best-effort, read-only
+Development projection from the typed runner operation; Git state never changes
+roadmap selection policy. The server owns all selection policy, and the web
+client renders the API response without choosing a different next action.
 
 ## Briefing composition
 
@@ -96,11 +97,11 @@ audit events, links it to the session, closes the session and writes close audit
 events in one PostgreSQL transaction. Any checkpoint, link, lifecycle or audit
 failure rolls back the checkpoint and leaves the session open.
 
-New checkpoints remain snapshot version 2. No version 3 is introduced: session
-bodies are not duplicated into snapshots. Existing v1 and v2 checkpoint rows
-are never modified and continue parsing/rendering through their existing union
-contract. Restore-test explicitly checks v1/v2 version agreement and the v2
-compact `recentAgentActivity` array.
+New checkpoints use snapshot version 3 and contain compact Git metadata captured
+best-effort before the database transaction. Session bodies, file paths, diffs,
+source content, raw remote URLs and commit history are not duplicated. Existing
+v1/v2 rows remain unchanged and readable. Runner/Git failure records an
+unavailable Git state and does not prevent the otherwise atomic close.
 
 ## API and audit
 

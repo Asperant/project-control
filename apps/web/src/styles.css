@@ -597,6 +597,31 @@ code {
   overflow-wrap: anywhere;
 }
 
+/* --- Read-only Development State ------------------------------------------ */
+.development-view { display: grid; gap: 1rem; min-width: 0; }
+.development-view > .card-head h2 { margin: 0; }
+.development-view .card { min-width: 0; }
+.development-facts,
+.development-counts { margin: 0.75rem 0 0; display: grid; gap: 0.65rem; }
+.development-counts { grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr)); }
+.development-facts > div,
+.development-counts > div { min-width: 0; }
+.development-facts dt,
+.development-counts dt { color: var(--text-muted); font-size: 0.75rem; font-weight: 650; text-transform: uppercase; }
+.development-facts dd,
+.development-counts dd { margin: 0.2rem 0 0; overflow-wrap: anywhere; }
+.development-counts dd { font-size: 1.1rem; font-weight: 650; }
+.development-files,
+.development-commits,
+.development-comparison { margin: 0.75rem 0 0; padding-left: 1.25rem; }
+.development-files li,
+.development-commits li { margin-bottom: 0.65rem; min-width: 0; overflow-wrap: anywhere; }
+.development-files li { display: grid; gap: 0.2rem; }
+.development-files span,
+.development-commits small { color: var(--text-muted); font-size: 0.78rem; }
+.development-commits li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.25rem 0.6rem; }
+.development-commits small { grid-column: 2; }
+
 /* --- Motion ---------------------------------------------------------------- */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -614,4 +639,6 @@ code {
   .filter-bar input[type='search'] { flex: unset; }
   .projects-toolbar { flex-direction: column; align-items: stretch; }
   .spacer-inline { margin-left: 0; }
+  .development-commits li { grid-template-columns: 1fr; }
+  .development-commits small { grid-column: 1; }
 }

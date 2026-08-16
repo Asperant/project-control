@@ -5,9 +5,9 @@
 // Nothing here spawns a process on caller-supplied input, opens a network
 // connection, or writes outside the runner's own working directory. The
 // project-registration operations (project.path.validate, project.inspect,
-// project.git.summary) read filesystem state under an operator-configured
-// allowed root and, for git.summary/inspect, invoke `git` — but always with a
-// fixed argv and a caller-independent directory already validated by
+// project.git.summary, project.git.development) read filesystem state under an
+// operator-configured allowed root and, for Git inspection, invoke `git` — but
+// always with a fixed argv and a caller-independent directory already validated by
 // internal/projectpath; see internal/gitinfo's package doc for the full
 // justification of that one exception to "the runner executes nothing".
 package operations
@@ -82,6 +82,13 @@ func All(cfg Config) []registry.Operation {
 			TimeoutSeconds: 15,
 			Params:         []registry.ParamSpec{{Name: "path", Type: "string", Required: true, MaxLength: 4096}},
 			Handler:        projectGitSummary(cfg),
+		},
+		{
+			Name:           "project.git.development",
+			Description:    "Validates a path, then returns bounded Git repository metadata. Strictly read-only.",
+			TimeoutSeconds: 20,
+			Params:         []registry.ParamSpec{{Name: "path", Type: "string", Required: true, MaxLength: 4096}},
+			Handler:        projectGitDevelopment(cfg),
 		},
 	}
 }

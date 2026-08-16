@@ -62,7 +62,10 @@ describe.skipIf(!hasDocker)('deterministic Resume Project briefing', () => {
     const briefing = await resume(id);
     expect(briefing.currentFocus).toMatchObject({ kind: 'none' });
     expect(briefing.recommendedNextAction).toEqual({ kind: 'none_pending', message: 'There is no pending roadmap action.' });
-    expect(briefing.attentionRequired.items).toEqual([]);
+    expect(briefing.attentionRequired.items).toEqual([
+      { key: 'git_inspection_unavailable', label: 'Git inspection is unavailable.', count: 1 },
+    ]);
+    expect(briefing.developmentState).toMatchObject({ status: 'unavailable', errorCode: 'runner_unavailable' });
     expect(briefing.workSessionHistory).toMatchObject({ workSessions: [], page: 1, pageSize: 20, total: 0 });
   });
 

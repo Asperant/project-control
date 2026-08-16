@@ -44,6 +44,13 @@ const resumeResponse = {
   lastCheckpoint: null,
   changesSinceCheckpoint: { hasCheckpoint: false, sinceCheckpointId: null, sinceCreatedAt: null, items: [] },
   activeAndBlockedWork: { active: [], blocked: [] },
+  developmentState: {
+    status: 'not_repository', errorCode: null, repository: { available: true, isRepository: false },
+    head: { sha: null, shortSha: null, branch: null, detached: false, unborn: false },
+    workingTree: { clean: null, stagedCount: 0, unstagedCount: 0, untrackedCount: 0, conflictedCount: 0, totalChangedCount: 0 },
+    remote: null, github: { detected: false, configured: false, status: 'unsupported' },
+    checkpointComparison: { status: 'no_git_checkpoint' }, attention: [],
+  },
   recentAgentWork: [],
   importantMemory: [],
   workSessionHistory: { workSessions: [], page: 1, pageSize: 20, total: 0 },
@@ -70,6 +77,25 @@ describe('project resume', () => {
     expect((fetchMock.mock.calls[0] as [string])[0]).toBe(`/api/projects/${PROJECT_ID}/resume`);
     expect(response.currentFocus.kind).toBe('work_session');
     expect(response.recommendedNextAction.kind).toBe('none_pending');
+  });
+});
+
+describe('project development', () => {
+  it('parses the coherent read-only Development response', async () => {
+    const responseBody = {
+      projectId: PROJECT_ID, status: 'not_repository', errorCode: null,
+      repository: { available: true, isRepository: false },
+      head: { sha: null, shortSha: null, branch: null, detached: false, unborn: false },
+      workingTree: { clean: null, stagedCount: 0, unstagedCount: 0, untrackedCount: 0, conflictedCount: 0, totalChangedCount: 0 },
+      files: [], filesTruncated: false, recentCommits: [], remote: null,
+      github: { detected: false, configured: false, status: 'unsupported' },
+      checkpointComparison: { status: 'no_git_checkpoint' },
+      attention: [{ key: 'repository_not_detected', label: 'The registered folder is not a Git repository', count: 1 }],
+    };
+    fetchMock.mockResolvedValue(jsonResponse(responseBody));
+    const response = await api.getProjectDevelopment(PROJECT_ID);
+    expect((fetchMock.mock.calls[0] as [string])[0]).toBe(`/api/projects/${PROJECT_ID}/development`);
+    expect(response.status).toBe('not_repository');
   });
 });
 
