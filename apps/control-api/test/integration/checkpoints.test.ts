@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { checkpointDetailResponseSchema, checkpointListResponseSchema } from '@project-control/contracts';
 import { hashPassword } from '../../src/auth/password.js';
 import { createHarness, dockerAvailable, readCookie, type TestHarness } from './helpers.js';
 
@@ -144,6 +145,57 @@ describe.skipIf(!hasDocker)('immutable checkpoints', () => {
     expect(detail.snapshotVersion).toBe(2);
     expect(detail.snapshot.version).toBe(2);
     expect(detail.snapshot).not.toHaveProperty('gitState');
+  });
+
+  it('parses real stored v1, v2 and v3 rows through the actual checkpointSnapshotSchema discriminated union the web client relies on (not just its own unit tests)', async () => {
+    // The two tests above prove the API returns v1/v2 rows without erroring, by
+    // asserting on the raw JSON. Neither the checkpoint routes nor the store
+    // ever run `checkpointSnapshotSchema` at read time (see checkpoints/store.ts's
+    // mapDetail: `snapshot: row.snapshot_json` is passed through untyped) — the
+    // only place that schema is actually invoked against a live response is the
+    // web panel's api-client, via `checkpointDetailResponseSchema.parse(...)`.
+    // This test calls the same schema, against the same kind of real,
+    // directly-inserted historical rows, to prove the discriminated union
+    // genuinely reads old real rows end to end — the gap the contracts
+    // package's own isolated schema unit tests cannot close.
+    const id = await project();
+
+    // v1 — shipped before Agent Run awareness or Git state existed.
+    const v1Snapshot = {
+      version: 1, projectId: id, projectName: 'V1 project', projectStatus: 'active', generatedAt: new Date().toISOString(),
+      currentFocus: [], inProgressTasks: [], blockedMilestones: [], blockedTasks: [], nextActions: [],
+      pendingAcceptance: [], unresolvedDependencies: [], recentlyCompletedTasks: [], pinnedMemory: [], importantMemory: [],
+    };
+    const v1Id = randomUUID();
+    await harness.ctx.db.query(
+      `INSERT INTO project_checkpoints (id, project_id, snapshot_version, snapshot_json, session_note) VALUES ($1,$2,1,$3::jsonb,'legacy')`,
+      [v1Id, id, JSON.stringify(v1Snapshot)],
+    );
+
+    // v2 — adds the body-free recentAgentActivity list, still no gitState.
+    const v2Snapshot = { ...v1Snapshot, projectName: 'V2 project', version: 2, recentAgentActivity: [] };
+    const v2Id = randomUUID();
+    await harness.ctx.db.query(
+      'INSERT INTO project_checkpoints (id,project_id,snapshot_version,snapshot_json) VALUES ($1,$2,2,$3::jsonb)',
+      [v2Id, id, JSON.stringify(v2Snapshot)],
+    );
+
+    // v3 — the current version. Produced through the real create-checkpoint
+    // path (never inserted directly): the application itself only ever writes
+    // the current shape, exactly as the task at hand describes.
+    const v3 = (await request('POST', `/api/projects/${id}/checkpoints`, { sessionNote: 'current' })).json().checkpoint;
+
+    const listBody = (await request('GET', `/api/projects/${id}/checkpoints`)).json();
+    const parsedList = checkpointListResponseSchema.parse(listBody);
+    expect(parsedList.checkpoints.map((c) => c.id).sort()).toEqual([v1Id, v2Id, v3.id].sort());
+
+    for (const [checkpointId, expectedVersion] of [[v1Id, 1], [v2Id, 2], [v3.id, 3]] as const) {
+      const raw = (await request('GET', `/api/projects/${id}/checkpoints/${checkpointId}`)).json();
+      // Throws on any schema mismatch — this is the assertion that matters.
+      const parsed = checkpointDetailResponseSchema.parse(raw);
+      expect(parsed.checkpoint.snapshot.version).toBe(expectedVersion);
+      expect(parsed.checkpoint.id).toBe(checkpointId);
+    }
   });
 
   it('includes recent, non-draft, non-archived Agent Run activity in the snapshot, newest first, capped at 5, with no prompt/report body', async () => {
