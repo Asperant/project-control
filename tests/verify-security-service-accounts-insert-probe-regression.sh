@@ -34,11 +34,11 @@ if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
 fi
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-CID="$(docker run -d --rm -e POSTGRES_PASSWORD=x -e POSTGRES_DB=probe postgres:17-alpine)"
+CID="$(docker run -d --rm -e POSTGRES_PASSWORD=regression-test-only -e POSTGRES_DB=probe postgres:17-alpine)"
 trap 'docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
 
 for _ in $(seq 1 30); do
-  docker exec -e PGPASSWORD=x "$CID" pg_isready -U postgres -d probe >/dev/null 2>&1 && break
+  docker exec -e PGPASSWORD=regression-test-only "$CID" pg_isready -U postgres -d probe >/dev/null 2>&1 && break
   sleep 1
 done
 
@@ -47,7 +47,7 @@ psql_as() {
   docker exec -i -e PGPASSWORD="$pw" "$CID" psql -U "$user" -d probe -tAc "$sql" 2>&1
 }
 
-docker exec -e PGPASSWORD=x "$CID" psql -U postgres -d probe -c \
+docker exec -e PGPASSWORD=regression-test-only "$CID" psql -U postgres -d probe -c \
   "CREATE TABLE service_accounts (id serial primary key, key text, display_name text, scopes text[]);
    CREATE ROLE probe_writer LOGIN PASSWORD 'w';
    CREATE ROLE probe_reader LOGIN PASSWORD 'r';

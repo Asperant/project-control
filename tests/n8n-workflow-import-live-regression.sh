@@ -85,7 +85,7 @@ trap cleanup EXIT
 docker network create --internal "$NETWORK" >/dev/null
 
 docker run --detach --name "$PG_CONTAINER" --network "$NETWORK" --user 999:999 \
-  --env POSTGRES_PASSWORD=disposable --env POSTGRES_USER=postgres --env POSTGRES_DB=n8n \
+  --env POSTGRES_PASSWORD=regression-test-only --env POSTGRES_USER=postgres --env POSTGRES_DB=n8n \
   --env PGDATA=/tmp/pgdata \
   --tmpfs /tmp:rw,size=512m --tmpfs /run/postgresql:rw,size=64m \
   --security-opt no-new-privileges:true --cap-drop ALL \
@@ -106,7 +106,7 @@ ok "scratch PostgreSQL ready"
 #    on a running container — see install-workflows.sh's own comment).
 # -----------------------------------------------------------------------------
 mkdir -p "${SCRATCH}/secrets" "${SCRATCH}/n8n-data" "${SCRATCH}/pcroot/config/status/automation/workflows"
-printf 'disposable' >"${SCRATCH}/secrets/db_password"
+printf 'regression-test-only' >"${SCRATCH}/secrets/db_password"
 printf '%s' "$(od -An -tx1 -N24 /dev/urandom | tr -d ' \n')" >"${SCRATCH}/secrets/encryption_key"
 chmod -R a+rwX "${SCRATCH}/n8n-data"
 
@@ -232,10 +232,10 @@ docker exec "$N8N_CONTAINER" rm -f /tmp/same-name-different-id.workflow.json >/d
 #    not-yet-claimed instance-owner user and personal project are what the
 #    import lands in — never an orphaned/ownerless row.
 # -----------------------------------------------------------------------------
-shared_row="$(docker exec -i -e PGPASSWORD=disposable "$PG_CONTAINER" \
+shared_row="$(docker exec -i -e PGPASSWORD=regression-test-only "$PG_CONTAINER" \
   psql -U postgres -d n8n -tAc "SELECT count(*) FROM shared_workflow WHERE \"workflowId\" = '${shipped_id}' AND role = 'workflow:owner'")"
 [[ "$shared_row" == "1" ]] || fail "the imported workflow has no workflow:owner share row — ownership assignment did not happen as expected"
-user_count="$(docker exec -i -e PGPASSWORD=disposable "$PG_CONTAINER" psql -U postgres -d n8n -tAc 'SELECT count(*) FROM "user"')"
+user_count="$(docker exec -i -e PGPASSWORD=regression-test-only "$PG_CONTAINER" psql -U postgres -d n8n -tAc 'SELECT count(*) FROM "user"')"
 [[ "$user_count" == "1" ]] \
   || fail "expected exactly one pre-existing (not-yet-claimed) instance-owner user row, found ${user_count}"
 ok "with no --userId/--projectId, the import is owned by n8n's own singleton pre-setup instance-owner user — never ownerless"
@@ -247,7 +247,7 @@ ok "with no --userId/--projectId, the import is owned by n8n's own singleton pre
 # -----------------------------------------------------------------------------
 # Reset to a clean single-workflow state so the script's own before/after
 # counting below is unambiguous.
-docker exec -i -e PGPASSWORD=disposable "$PG_CONTAINER" \
+docker exec -i -e PGPASSWORD=regression-test-only "$PG_CONTAINER" \
   psql -U postgres -d n8n -tAc "DELETE FROM shared_workflow; DELETE FROM workflow_entity;" >/dev/null
 [[ "$(n8n_workflow_count)" == "0" ]] || fail "could not reset the disposable n8n to zero workflows before testing install-workflows.sh"
 
