@@ -46,6 +46,8 @@ import {
   workflowRunResponseSchema,
   serviceTokenListResponseSchema,
   revokeServiceTokenResponseSchema,
+  timelineListResponseSchema,
+  searchResponseSchema,
   type AgentRunListResponse,
   type AgentRunResponse,
   type AgentRunPromptResponse,
@@ -125,6 +127,10 @@ import {
   type RequestWorkflowRunRequest,
   type ServiceTokenListResponse,
   type RevokeServiceTokenResponse,
+  type TimelineListQuery,
+  type TimelineListResponse,
+  type SearchQuery,
+  type SearchResponse,
 } from '@project-control/contracts';
 
 /**
@@ -506,4 +512,23 @@ export const api = {
   // --- Service tokens ----------------------------------------------------------
   listServiceTokens(signal?:AbortSignal):Promise<ServiceTokenListResponse>{return request('/api/automation/service-tokens',serviceTokenListResponseSchema,signal?{signal}:{});},
   revokeServiceToken(tokenId:string):Promise<RevokeServiceTokenResponse>{return request(`/api/automation/service-tokens/${tokenId}/revoke`,revokeServiceTokenResponseSchema,{method:'POST'});},
+
+  // --- Timeline / search -------------------------------------------------------
+  getProjectTimeline(projectId:string,query:Partial<TimelineListQuery> = {},signal?:AbortSignal):Promise<TimelineListResponse>{
+    const params=new URLSearchParams();
+    for(const [key,value] of Object.entries(query)){if(value===undefined||value==='')continue;params.set(key,String(value));}
+    const qs=params.toString();
+    return request(`/api/projects/${projectId}/timeline${qs?`?${qs}`:''}`,timelineListResponseSchema,signal?{signal}:{});
+  },
+  getGlobalTimeline(query:Partial<TimelineListQuery> = {},signal?:AbortSignal):Promise<TimelineListResponse>{
+    const params=new URLSearchParams();
+    for(const [key,value] of Object.entries(query)){if(value===undefined||value==='')continue;params.set(key,String(value));}
+    const qs=params.toString();
+    return request(`/api/timeline${qs?`?${qs}`:''}`,timelineListResponseSchema,signal?{signal}:{});
+  },
+  searchGlobal(query:SearchQuery,signal?:AbortSignal):Promise<SearchResponse>{
+    const params=new URLSearchParams();
+    for(const [key,value] of Object.entries(query)){if(value===undefined||value==='')continue;params.set(key,String(value));}
+    return request(`/api/search?${params.toString()}`,searchResponseSchema,signal?{signal}:{});
+  },
 };

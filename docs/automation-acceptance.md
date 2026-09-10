@@ -1,17 +1,27 @@
-# Stage 9 live acceptance runbook
+# Automation feature live acceptance runbook
 
-Everything below is written for a human to run, in order, against the real
+Everything below is written to be run, in order, against the real
 production host, on the **first** live deployment of the automation
-(n8n workflow) feature. **None of it has been executed by an agent.** All
-automated verification that *can* run without touching production — the
-full `tests/*.sh` suite, `pnpm`/`go` gates, and a complete characterisation
-of `n8n import:workflow`'s real behavior against a disposable, throwaway
-n8n + PostgreSQL pair — already has, and is reported separately. This
-document exists because five of the eighteen steps below (service token
-creation, `update`, `install-workflows`, n8n owner-scoped UI actions, and
-`restore-test`) are exactly the class of action that must never be
+(n8n workflow) feature. All automated verification that *can* run without
+touching production — the full `tests/*.sh` suite, `pnpm`/`go` gates, and a
+complete characterisation of `n8n import:workflow`'s real behavior against
+a disposable, throwaway n8n + PostgreSQL pair — is reported separately.
+This document exists because five of the eighteen steps below (service
+token creation, `update`, `install-workflows`, n8n owner-scoped UI actions,
+and `restore-test`) are exactly the class of action that must never be
 "tested" by running it for real outside of a live deployment window: doing
 so *is* using it.
+
+**Run to completion on 2026-09-02.** All 18 steps passed. Along the way this
+run surfaced and fixed several real gaps the pre-deployment test suite had
+not caught: `/api/system/status` rejecting the service token it was meant
+for, a broken SQL probe in `verify-security.sh`, `n8n audit` flagging this
+deployment's own reviewed workflows as unreviewed risk, a missing Telegram
+`$env` path, and a host-specific non-reproducible-build issue that kept
+orphaning locally-built image tags mid-recovery. Keep this runbook (and one
+like it for every future feature that touches the live host) as a required
+step before calling a feature done — the existing test suite, however
+thorough, did not catch any of the above on its own.
 
 **Hard constraints for anyone running this runbook:**
 

@@ -302,6 +302,15 @@ export const automationRoutes = (ctx: AppContext): FastifyPluginAsync => async (
       subject: `service_account:${principal.account.key}`,
       detail: { runId: run.id, workflowKey: run.workflowKey, status: run.status, severity: body.severity, notify },
     });
+    await ctx.timeline.record({
+      projectId: run.projectId,
+      entityType: 'workflow_run',
+      entityId: run.id,
+      eventType: 'workflow_run.settled',
+      summary: `${run.workflowKey} ${run.status}: "${body.summary.slice(0, 90)}"`,
+      actorUserId: null,
+      actorKind: 'service',
+    });
 
     const responseBody: SettleWorkflowRunResponse = { run, notify };
     return reply.code(200).send(responseBody);

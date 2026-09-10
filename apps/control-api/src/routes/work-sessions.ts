@@ -9,7 +9,8 @@ import type { AuditEventType } from '../audit.js';
 import { createRequireAuth, requireRole } from '../auth/middleware.js';
 import type { AppContext } from '../context.js';
 import { AppError, badRequest } from '../errors.js';
-import type { MutationAudit } from '../roadmap/store.js';
+import type { MutationAudit, MutationTimeline } from '../roadmap/store.js';
+import type { TimelineEntityType, TimelineEventType } from '../timeline.js';
 import {
   addWorkSessionAmendment, closeWorkSession, getWorkSession, listWorkSessions,
   startWorkSession, updateWorkSession,
@@ -48,6 +49,19 @@ export const workSessionRoutes = (ctx: AppContext): FastifyPluginAsync => async 
       },
       client,
     );
+  const timelineFor = (request: FastifyRequest): MutationTimeline => async (client, entry) =>
+    ctx.timeline.recordRequired(
+      {
+        projectId: entry.projectId ?? null,
+        entityType: entry.entityType as TimelineEntityType,
+        entityId: entry.entityId,
+        eventType: entry.eventType as TimelineEventType,
+        summary: entry.summary,
+        actorUserId: request.auth!.user.id,
+        actorKind: 'user',
+      },
+      client,
+    );
 
   app.get('/api/projects/:projectId/work-sessions', { preHandler: requireAuth }, async (request, reply) => {
     const { projectId } = ids(request);
@@ -65,7 +79,7 @@ export const workSessionRoutes = (ctx: AppContext): FastifyPluginAsync => async 
     const { projectId } = ids(request);
     const body = parse(startWorkSessionRequestSchema, request.body);
     const workSession = await startWorkSession(
-      ctx.db, projectId!, request.auth!.user.id, body, auditFor(request),
+      ctx.db, projectId!, request.auth!.user.id, body, auditFor(request), timelineFor(request),
     );
     return reply.code(201).send({ workSession });
   });
@@ -83,7 +97,7 @@ export const workSessionRoutes = (ctx: AppContext): FastifyPluginAsync => async 
     const body = parse(closeWorkSessionRequestSchema, request.body);
     return reply.send({
       workSession: await closeWorkSession(
-        ctx.db, projectId!, sessionId!, request.auth!.user.id, body, auditFor(request), ctx.runner, String(request.id),
+        ctx.db, projectId!, sessionId!, request.auth!.user.id, body, auditFor(request), ctx.runner, timelineFor(request), String(request.id),
       ),
     });
   });

@@ -12,6 +12,17 @@ import type {
 
 export type { Executor };
 export type MutationAudit = (client: DbClient, eventType: string, detail: Record<string, unknown>) => Promise<void>;
+/**
+ * Curried per-request timeline writer, the same shape as MutationAudit and
+ * bound the same way (see routes/*.ts's `timelineFor`). Only call sites that
+ * represent an event worth showing on a curated activity feed pass one —
+ * most mutations are audit-only. `entityId`/`projectId` may be null for the
+ * rare event with no single entity or project (there are none of those yet).
+ */
+export type MutationTimeline = (
+  client: DbClient,
+  entry: { entityType: string; entityId: string | null; eventType: string; summary: string; projectId?: string | null },
+) => Promise<void>;
 export { getProjectGuard };
 type MilestoneRow = {
   id: string; project_id: string; title: string; description: string; status: RoadmapMilestone['status'];
@@ -100,7 +111,7 @@ export async function loadRoadmap(db: Executor, projectId: string): Promise<Proj
   return { projectId, readOnly: project.status === 'archived', progress: progress(tasks), milestones: mapped };
 }
 
-export async function createMilestone(db: Db, projectId: string, actorId: string, input: CreateMilestoneRequest, audit: MutationAudit): Promise<string> {
+export async function createMilestone(db: Db, projectId: string, actorId: string, input: CreateMilestoneRequest, audit: MutationAudit, timeline: MutationTimeline): Promise<string> {
   return withTransaction(db, async (client) => {
     assertProjectMutable(await getProjectGuard(client, projectId, true));
     if (input.status === 'blocked' && !input.blockedReason) throw new AppError('validation_failed', 'A block reason is required.', { fields: [{ path: 'blockedReason', message: 'Required when status is blocked.' }] });
@@ -108,7 +119,9 @@ export async function createMilestone(db: Db, projectId: string, actorId: string
     await client.query(`INSERT INTO roadmap_milestones (id,project_id,title,description,status,priority,sort_order,target_date,blocked_reason,started_at,completed_at,created_by)
       VALUES ($1,$2,$3,$4,$5,$6,(SELECT count(*) FROM roadmap_milestones WHERE project_id=$2),$7,$8,CASE WHEN $5='in_progress' THEN now() END,CASE WHEN $5='done' THEN now() END,$9)`,
       [id, projectId, input.title, input.description, input.status, input.priority, input.targetDate ?? null, input.blockedReason ?? null, actorId]);
-    await audit(client,'roadmap.milestone.created',{projectId,milestoneId:id,status:input.status,priority:input.priority}); return id;
+    await audit(client,'roadmap.milestone.created',{projectId,milestoneId:id,status:input.status,priority:input.priority});
+    await timeline(client, { entityType: 'roadmap_milestone', entityId: id, eventType: 'roadmap_milestone.created', projectId, summary: `Milestone created: "${input.title.slice(0,100)}"` });
+    return id;
   });
 }
 
@@ -124,7 +137,7 @@ export async function updateMilestone(db: Db, projectId: string, milestoneId: st
   });
 }
 
-export async function changeMilestoneStatus(db: Db, projectId: string, milestoneId: string, input: ChangeMilestoneStatusRequest, audit: MutationAudit): Promise<{ from: string }> {
+export async function changeMilestoneStatus(db: Db, projectId: string, milestoneId: string, input: ChangeMilestoneStatusRequest, audit: MutationAudit, timeline: MutationTimeline): Promise<{ from: string }> {
   return withTransaction(db, async (client) => {
     assertProjectMutable(await getProjectGuard(client, projectId, true));
     const row = await getMilestone(client, projectId, milestoneId, true);
@@ -137,7 +150,11 @@ export async function changeMilestoneStatus(db: Db, projectId: string, milestone
       completed_at=CASE WHEN $3='done' THEN now() WHEN status='done' THEN NULL ELSE completed_at END WHERE id=$1 AND project_id=$2`,
       [milestoneId, projectId, input.status, input.blockedReason ?? null]);
     const eventType=input.status==='blocked'?'roadmap.milestone.blocked':input.status==='done'?'roadmap.milestone.completed':(row.status==='done'||row.status==='cancelled')?'roadmap.milestone.reopened':'roadmap.milestone.status_changed';
-    await audit(client,eventType,{projectId,milestoneId,from:row.status,to:input.status,blockReasonPresent:input.status==='blocked',...(input.status==='blocked'&&input.blockedReason?{blockedReason:sanitiseAuditText(input.blockedReason)}:{})}); return { from: row.status };
+    await audit(client,eventType,{projectId,milestoneId,from:row.status,to:input.status,blockReasonPresent:input.status==='blocked',...(input.status==='blocked'&&input.blockedReason?{blockedReason:sanitiseAuditText(input.blockedReason)}:{})});
+    if (input.status === 'done') {
+      await timeline(client, { entityType: 'roadmap_milestone', entityId: milestoneId, eventType: 'roadmap_milestone.completed', projectId, summary: `Milestone completed: "${row.title.slice(0,100)}"` });
+    }
+    return { from: row.status };
   });
 }
 
@@ -158,7 +175,7 @@ export async function setMilestoneArchived(db: Db, projectId: string, milestoneI
   await withTransaction(db, async (client) => { assertProjectMutable(await getProjectGuard(client, projectId, true)); const row = await getMilestone(client, projectId, milestoneId, true); if (!archived && !row.archived_at) return; if (archived && row.archived_at) return; await client.query('UPDATE roadmap_milestones SET archived_at=CASE WHEN $3 THEN now() ELSE NULL END WHERE id=$1 AND project_id=$2', [milestoneId, projectId, archived]); await audit(client,archived?'roadmap.milestone.archived':'roadmap.milestone.reactivated',{projectId,milestoneId}); });
 }
 
-export async function createTask(db: Db, projectId: string, milestoneId: string, actorId: string, input: CreateTaskRequest,audit:MutationAudit): Promise<string> {
+export async function createTask(db: Db, projectId: string, milestoneId: string, actorId: string, input: CreateTaskRequest,audit:MutationAudit, timeline: MutationTimeline): Promise<string> {
   return withTransaction(db, async (client) => {
     assertProjectMutable(await getProjectGuard(client, projectId, true));
     assertMilestoneMutable(await getMilestone(client, projectId, milestoneId, true));
@@ -166,13 +183,15 @@ export async function createTask(db: Db, projectId: string, milestoneId: string,
     await client.query(`INSERT INTO roadmap_tasks (id,milestone_id,title,description,status,priority,sort_order,started_at,completed_at,cancelled_at,created_by)
       VALUES ($1,$2,$3,$4,$5,$6,(SELECT count(*) FROM roadmap_tasks WHERE milestone_id=$2),CASE WHEN $5='in_progress' THEN now() END,CASE WHEN $5='done' THEN now() END,CASE WHEN $5='cancelled' THEN now() END,$7)`,
       [id, milestoneId, input.title, input.description, input.status, input.priority, actorId]);
-    await audit(client,'roadmap.task.created',{projectId,milestoneId,taskId:id,status:input.status,priority:input.priority}); return id;
+    await audit(client,'roadmap.task.created',{projectId,milestoneId,taskId:id,status:input.status,priority:input.priority});
+    await timeline(client, { entityType: 'roadmap_task', entityId: id, eventType: 'roadmap_task.created', projectId, summary: `Task created: "${input.title.slice(0,100)}"` });
+    return id;
   });
 }
 export async function updateTask(db: Db, projectId: string, taskId: string, input: UpdateTaskRequest,audit:MutationAudit): Promise<void> {
   await withTransaction(db, async (client) => { assertProjectMutable(await getProjectGuard(client, projectId, true)); const row=await getTask(client, projectId, taskId, true); assertTaskContainerMutable(row); await client.query('UPDATE roadmap_tasks SET title=COALESCE($2,title),description=COALESCE($3,description),priority=COALESCE($4,priority),next_action=COALESCE($5,next_action) WHERE id=$1', [taskId,input.title??null,input.description??null,input.priority??null,input.nextAction??null]); await audit(client,'roadmap.task.updated',{projectId,milestoneId:row.milestone_id,taskId,changedFields:Object.keys(input)}); });
 }
-export async function changeTaskStatus(db: Db, projectId: string, taskId: string, input: ChangeTaskStatusRequest,audit:MutationAudit): Promise<{ from: string; acceptanceOverride: boolean; dependencyOverride: boolean }> {
+export async function changeTaskStatus(db: Db, projectId: string, taskId: string, input: ChangeTaskStatusRequest,audit:MutationAudit, timeline: MutationTimeline): Promise<{ from: string; acceptanceOverride: boolean; dependencyOverride: boolean }> {
   return withTransaction(db, async (client) => {
     assertProjectMutable(await getProjectGuard(client, projectId, true));
     const row=await getTask(client, projectId, taskId, true); assertTaskContainerMutable(row);
@@ -190,6 +209,9 @@ export async function changeTaskStatus(db: Db, projectId: string, taskId: string
     const eventType=input.status==='in_progress'&&row.status==='planned'?'roadmap.task.started':input.status==='blocked'?'roadmap.task.blocked':input.status==='done'?'roadmap.task.completed':input.status==='cancelled'?'roadmap.task.cancelled':(row.status==='done'||row.status==='cancelled')?'roadmap.task.reopened':row.status==='blocked'?'roadmap.task.unblocked':'roadmap.task.status_changed';
     await audit(client,eventType,{projectId,milestoneId:row.milestone_id,taskId,from:row.status,to:input.status,blockReasonPresent:input.status==='blocked',...(input.status==='blocked'&&input.blockedReason?{blockedReason:sanitiseAuditText(input.blockedReason)}:{}),acceptanceOverride:acceptance>0,dependencyOverride:dependencies>0,incompleteAcceptanceCount:acceptance,unresolvedDependencyCount:dependencies});
     if(dependencies>0)await audit(client,'roadmap.dependency.override',{projectId,milestoneId:row.milestone_id,taskId,count:dependencies});
+    if (input.status === 'done') {
+      await timeline(client, { entityType: 'roadmap_task', entityId: taskId, eventType: 'roadmap_task.completed', projectId, summary: `Task completed: "${row.title.slice(0,100)}"` });
+    }
     return { from: row.status, acceptanceOverride: acceptance > 0, dependencyOverride: dependencies > 0 };
   });
 }

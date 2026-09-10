@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import type {
   ArtifactSelfTestResponse,
   AuthSessionResponse,
@@ -7,13 +8,24 @@ import type {
 import { ApiError, api } from '../api-client';
 import { StatusBadge } from './StatusBadge';
 import { ProjectsRoot } from './projects/ProjectsRoot';
+import { ProjectSwitcher } from './projects/ProjectSwitcher';
 import { AutomationView } from './automation/AutomationView';
+import { GlobalSearch } from './search/GlobalSearch';
+import { GlobalTimelineView } from './timeline/GlobalTimelineView';
 
 const POLL_INTERVAL_MS = 15_000;
 
+const TOP_TABS = [
+  { path: '/projects', label: 'Projects' },
+  { path: '/timeline', label: 'Activity' },
+  { path: '/automation', label: 'Automation' },
+  { path: '/system', label: 'System' },
+] as const;
+
 /**
- * Panel shell: a tab switch between the system health view (Stage 1) and
- * project registration (this stage), plus session details and sign-out.
+ * Panel shell: real routes for every top-level section (see main.tsx's
+ * BrowserRouter), plus session details, project switcher, global search, and
+ * sign-out in the header.
  */
 export function Dashboard({
   session,
@@ -24,7 +36,7 @@ export function Dashboard({
   onSignedOut: () => void;
   onSessionExpired: () => void;
 }): React.JSX.Element {
-  const [tab, setTab] = useState<'system' | 'projects' | 'automation'>('projects');
+  const location = useLocation();
   const canWriteProjects = session.user.role === 'admin' || session.user.role === 'operator';
   const canWriteAutomation = session.user.role === 'admin' || session.user.role === 'operator';
   const isAdmin = session.user.role === 'admin';
@@ -37,16 +49,19 @@ export function Dashboard({
         <h1>Project Control</h1>
 
         <nav className="tab-nav" aria-label="Sections">
-          <button type="button" className={tab === 'projects' ? 'tab-active' : ''} onClick={() => setTab('projects')}>
-            Projects
-          </button>
-          <button type="button" className={tab === 'automation' ? 'tab-active' : ''} onClick={() => setTab('automation')}>
-            Automation
-          </button>
-          <button type="button" className={tab === 'system' ? 'tab-active' : ''} onClick={() => setTab('system')}>
-            System
-          </button>
+          {TOP_TABS.map((item) => (
+            <Link
+              key={item.path}
+              to={item.path}
+              className={location.pathname.startsWith(item.path) ? 'tab-active' : ''}
+            >
+              {item.label}
+            </Link>
+          ))}
         </nav>
+
+        <GlobalSearch onSessionExpired={onSessionExpired} />
+        <ProjectSwitcher />
 
         <div className="spacer" />
 
@@ -59,15 +74,14 @@ export function Dashboard({
       </header>
 
       <main id="main-content">
-        {tab === 'projects' && (
-          <ProjectsRoot canWrite={canWriteProjects} onSessionExpired={onSessionExpired} />
-        )}
-        {tab === 'automation' && (
-          <AutomationView isAdmin={isAdmin} canWrite={canWriteAutomation} onSessionExpired={onSessionExpired} />
-        )}
-        {tab === 'system' && (
-          <SystemPanel session={session} onSessionExpired={onSessionExpired} />
-        )}
+        <Routes>
+          <Route path="/" element={<Navigate to="/projects" replace />} />
+          <Route path="/projects/*" element={<ProjectsRoot canWrite={canWriteProjects} onSessionExpired={onSessionExpired} />} />
+          <Route path="/timeline" element={<GlobalTimelineView onSessionExpired={onSessionExpired} />} />
+          <Route path="/automation" element={<AutomationView isAdmin={isAdmin} canWrite={canWriteAutomation} onSessionExpired={onSessionExpired} />} />
+          <Route path="/system" element={<SystemPanel session={session} onSessionExpired={onSessionExpired} />} />
+          <Route path="*" element={<Navigate to="/projects" replace />} />
+        </Routes>
       </main>
     </>
   );

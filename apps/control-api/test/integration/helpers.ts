@@ -8,6 +8,7 @@ import pg from 'pg';
 
 import { buildApp } from '../../src/app.js';
 import { AuditLog } from '../../src/audit.js';
+import { TimelineLog } from '../../src/timeline.js';
 import { SessionStore } from '../../src/auth/session-store.js';
 import { ServiceTokenStore } from '../../src/auth/service-token-store.js';
 import { AutomationStore } from '../../src/automation/store.js';
@@ -232,6 +233,7 @@ export async function createHarness(options: CreateHarnessOptions = {}): Promise
       db,
       logger,
       audit: new AuditLog(db, logger),
+      timeline: new TimelineLog(db, logger),
       sessions: new SessionStore(db, config),
       serviceTokens: new ServiceTokenStore(db),
       automation: new AutomationStore(db, automationManifest),

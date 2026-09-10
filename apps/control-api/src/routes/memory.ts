@@ -14,7 +14,8 @@ import {
 } from '../memory/store.js';
 import { archiveCheckpoint, createCheckpoint, getCheckpoint, listCheckpoints } from '../checkpoints/store.js';
 import { getProjectContext } from '../context/store.js';
-import type { MutationAudit } from '../roadmap/store.js';
+import type { MutationAudit, MutationTimeline } from '../roadmap/store.js';
+import type { TimelineEntityType, TimelineEventType } from '../timeline.js';
 
 function parse<T>(schema: { safeParse: (v: unknown) => { success: boolean; data?: T; error?: z.ZodError } }, value: unknown): T {
   const result = schema.safeParse(value);
@@ -41,6 +42,19 @@ export const memoryRoutes = (ctx: AppContext): FastifyPluginAsync => async (app)
       { eventType: eventType as AuditEventType, outcome: 'success', actorUserId: request.auth!.user.id, requestId: request.id, subject: `project:${String(detail['projectId'])}`, detail },
       client,
     );
+  const timelineFor = (request: FastifyRequest): MutationTimeline => async (client, entry) =>
+    ctx.timeline.recordRequired(
+      {
+        projectId: entry.projectId ?? null,
+        entityType: entry.entityType as TimelineEntityType,
+        entityId: entry.entityId,
+        eventType: entry.eventType as TimelineEventType,
+        summary: entry.summary,
+        actorUserId: request.auth!.user.id,
+        actorKind: 'user',
+      },
+      client,
+    );
 
   // --- Memory entries --------------------------------------------------------
   app.get('/api/projects/:projectId/memory', { preHandler: requireAuth }, async (request, reply) => {
@@ -55,7 +69,7 @@ export const memoryRoutes = (ctx: AppContext): FastifyPluginAsync => async (app)
   app.post('/api/projects/:projectId/memory', { preHandler: requireWriter }, async (request, reply) => {
     const { projectId } = ids(request);
     const body = parse(createMemoryEntryRequestSchema, request.body);
-    return reply.code(201).send({ entry: await createMemoryEntry(ctx.db, projectId!, request.auth!.user.id, body, auditFor(request)) });
+    return reply.code(201).send({ entry: await createMemoryEntry(ctx.db, projectId!, request.auth!.user.id, body, auditFor(request), timelineFor(request)) });
   });
   app.patch('/api/projects/:projectId/memory/:entryId', { preHandler: requireWriter }, async (request, reply) => {
     const { projectId, entryId } = ids(request);
@@ -81,7 +95,7 @@ export const memoryRoutes = (ctx: AppContext): FastifyPluginAsync => async (app)
   app.post('/api/projects/:projectId/memory/:entryId/supersede', { preHandler: requireWriter }, async (request, reply) => {
     const { projectId, entryId } = ids(request);
     const body = parse(supersedeMemoryEntryRequestSchema, request.body);
-    const result = await supersedeMemoryEntry(ctx.db, projectId!, entryId!, request.auth!.user.id, body, auditFor(request));
+    const result = await supersedeMemoryEntry(ctx.db, projectId!, entryId!, request.auth!.user.id, body, auditFor(request), timelineFor(request));
     return reply.code(201).send(result);
   });
 
@@ -99,7 +113,7 @@ export const memoryRoutes = (ctx: AppContext): FastifyPluginAsync => async (app)
     const { projectId } = ids(request);
     const body = parse(createCheckpointRequestSchema, request.body ?? {});
     const checkpoint = await createCheckpoint(
-      ctx.db, projectId!, request.auth!.user.id, body.sessionNote, auditFor(request), ctx.runner, String(request.id),
+      ctx.db, projectId!, request.auth!.user.id, body.sessionNote, auditFor(request), ctx.runner, timelineFor(request), String(request.id),
     );
     return reply.code(201).send({ checkpoint });
   });

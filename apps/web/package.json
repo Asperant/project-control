@@ -17,7 +17,8 @@
     "@project-control/contracts": "workspace:*",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "react-markdown": "^10.1.0"
+    "react-markdown": "^10.1.0",
+    "react-router-dom": "^7.18.3"
   },
   "devDependencies": {
     "@types/react": "19.2.18",

@@ -10,7 +10,7 @@ import { withTransaction } from '../db/pool.js';
 import { AppError, notFound } from '../errors.js';
 import { getMemoryEntry, insertEntry } from '../memory/store.js';
 import { getProjectGuard, assertProjectMutable as assertProjectMutableBase, type Executor } from '../projects/guard.js';
-import type { MutationAudit } from '../roadmap/store.js';
+import type { MutationAudit, MutationTimeline } from '../roadmap/store.js';
 
 const SUBJECT = 'Agent Run';
 function assertProjectMutable(project: { id: string; status: string }): void {
@@ -150,7 +150,7 @@ export async function getAgentRun(db: Executor, projectId: string, runId: string
 }
 
 export async function createAgentRun(
-  db: Db, projectId: string, actorId: string, input: CreateAgentRunRequest, audit: MutationAudit,
+  db: Db, projectId: string, actorId: string, input: CreateAgentRunRequest, audit: MutationAudit, timeline: MutationTimeline,
 ): Promise<AgentRun> {
   return withTransaction(db, async (client) => {
     assertProjectMutable(await getProjectGuard(client, projectId, true));
@@ -165,6 +165,10 @@ export async function createAgentRun(
       [id, projectId, input.title, input.agentName, input.relatedMilestoneId ?? null, input.relatedTaskId ?? null, actorId],
     );
     await audit(client, 'agentrun.created', { projectId, agentRunId: id, agentName: input.agentName, relatedTaskId: input.relatedTaskId ?? null, relatedMilestoneId: input.relatedMilestoneId ?? null });
+    await timeline(client, {
+      entityType: 'agent_run', entityId: id, eventType: 'agent_run.created', projectId,
+      summary: `Agent Run created: "${input.title.slice(0, 100)}"`,
+    });
     return mapRun(await loadRun(client, projectId, id));
   });
 }
@@ -213,7 +217,7 @@ const STATUS_EVENT: Record<'in_progress' | 'completed' | 'failed' | 'cancelled',
 };
 
 export async function setAgentRunStatus(
-  db: Db, projectId: string, runId: string, target: 'in_progress' | 'completed' | 'failed' | 'cancelled', audit: MutationAudit,
+  db: Db, projectId: string, runId: string, target: 'in_progress' | 'completed' | 'failed' | 'cancelled', audit: MutationAudit, timeline: MutationTimeline,
 ): Promise<AgentRun> {
   return withTransaction(db, async (client) => {
     assertProjectMutable(await getProjectGuard(client, projectId, true));
@@ -233,6 +237,12 @@ export async function setAgentRunStatus(
       [runId, target],
     );
     await audit(client, STATUS_EVENT[target], { projectId, agentRunId: runId, from: row.status, to: target });
+    if (target === 'completed' || target === 'failed') {
+      await timeline(client, {
+        entityType: 'agent_run', entityId: runId, eventType: target === 'completed' ? 'agent_run.completed' : 'agent_run.failed', projectId,
+        summary: `Agent Run ${target}: "${row.title.slice(0, 100)}"`,
+      });
+    }
     return mapRun(await loadRun(client, projectId, runId));
   });
 }

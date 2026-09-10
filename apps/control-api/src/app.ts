@@ -22,6 +22,8 @@ import { developmentRoutes } from './routes/development.js';
 import { repositoryActionRoutes } from './routes/repository-actions.js';
 import { automationRoutes } from './routes/automation.js';
 import { serviceTokenRoutes } from './routes/service-tokens.js';
+import { timelineRoutes } from './routes/timeline.js';
+import { searchRoutes } from './routes/search.js';
 
 /**
  * Builds the Fastify instance.
@@ -222,6 +224,8 @@ export async function buildApp(ctx: AppContext) {
   await app.register(resumeRoutes(ctx));
   await app.register(automationRoutes(ctx));
   await app.register(serviceTokenRoutes(ctx));
+  await app.register(timelineRoutes(ctx));
+  await app.register(searchRoutes(ctx));
 
   return app;
 }

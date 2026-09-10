@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import type {
   CommandType,
   ProjectActivityEntry,
@@ -9,11 +10,16 @@ import type {
 } from '@project-control/contracts';
 import { ApiError, api } from '../../api-client';
 import { AccessibilityBadge, ProjectPriorityBadge, ProjectStatusBadge, formatRelativeTime } from './badges';
+import { rememberRecentProject } from './recentProjects';
 import { RoadmapView } from '../roadmap/RoadmapView';
 import { MemoryView } from '../memory/MemoryView';
 import { AgentRunsView } from '../agent-runs/AgentRunsView';
 import { ResumeView } from '../resume/ResumeView';
 import { DevelopmentView } from '../development/DevelopmentView';
+import { TimelineFeed } from '../timeline/TimelineFeed';
+
+const TAB_SEGMENTS = ['resume', 'development', 'roadmap', 'memory', 'agent-runs', 'timeline'] as const;
+type Tab = 'overview' | (typeof TAB_SEGMENTS)[number];
 
 export function ProjectDetail({
   projectId,
@@ -32,8 +38,22 @@ export function ProjectDetail({
   const [activity, setActivity] = useState<ProjectActivityEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [view, setView] = useState<'overview' | 'resume' | 'development' | 'roadmap' | 'memory' | 'agent-runs'>('overview');
-  const [memoryCheckpointId, setMemoryCheckpointId] = useState<string | null>(null);
+
+  // The active tab and the memory-view's checkpoint filter both live in the
+  // URL — real, bookmarkable state, not local component state — so a link to
+  // "this project's Roadmap tab" or "Memory filtered to this checkpoint" is
+  // an address a person can actually share or reload.
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const suffix = location.pathname.slice(`/projects/${projectId}`.length).replace(/^\//, '') as string;
+  const view: Tab = (TAB_SEGMENTS as readonly string[]).includes(suffix) ? (suffix as Tab) : 'overview';
+  const memoryCheckpointId = searchParams.get('checkpoint');
+
+  function goToTab(tab: Tab, query?: Record<string, string>): void {
+    const qs = query ? `?${new URLSearchParams(query).toString()}` : '';
+    navigate(`/projects/${projectId}${tab === 'overview' ? '' : `/${tab}`}${qs}`);
+  }
 
   const [editingInfo, setEditingInfo] = useState(false);
   const [form, setForm] = useState<{
@@ -56,6 +76,7 @@ export function ProjectDetail({
         setProject(detail.project);
         setActivity(activityResponse.entries);
         setError(null);
+        rememberRecentProject(projectId, detail.project.name);
       } catch (caught) {
         if (caught instanceof DOMException && caught.name === 'AbortError') return;
         if (caught instanceof ApiError) {
@@ -213,16 +234,17 @@ export function ProjectDetail({
       )}
 
       <nav className="detail-tabs" aria-label="Project detail sections">
-        <button type="button" aria-current={view === 'overview' ? 'page' : undefined} onClick={() => setView('overview')}>Overview</button>
-        <button type="button" aria-current={view === 'resume' ? 'page' : undefined} onClick={() => setView('resume')}>Resume</button>
-        <button type="button" aria-current={view === 'development' ? 'page' : undefined} onClick={() => setView('development')}>Development</button>
-        <button type="button" aria-current={view === 'roadmap' ? 'page' : undefined} onClick={() => setView('roadmap')}>Roadmap</button>
-        <button type="button" aria-current={view === 'memory' ? 'page' : undefined} onClick={() => { setMemoryCheckpointId(null); setView('memory'); }}>Memory</button>
-        <button type="button" aria-current={view === 'agent-runs' ? 'page' : undefined} onClick={() => setView('agent-runs')}>Agent Runs</button>
+        <button type="button" aria-current={view === 'overview' ? 'page' : undefined} onClick={() => goToTab('overview')}>Overview</button>
+        <button type="button" aria-current={view === 'resume' ? 'page' : undefined} onClick={() => goToTab('resume')}>Resume</button>
+        <button type="button" aria-current={view === 'development' ? 'page' : undefined} onClick={() => goToTab('development')}>Development</button>
+        <button type="button" aria-current={view === 'roadmap' ? 'page' : undefined} onClick={() => goToTab('roadmap')}>Roadmap</button>
+        <button type="button" aria-current={view === 'memory' ? 'page' : undefined} onClick={() => goToTab('memory')}>Memory</button>
+        <button type="button" aria-current={view === 'agent-runs' ? 'page' : undefined} onClick={() => goToTab('agent-runs')}>Agent Runs</button>
+        <button type="button" aria-current={view === 'timeline' ? 'page' : undefined} onClick={() => goToTab('timeline')}>Timeline</button>
       </nav>
 
       {view === 'resume' ? (
-        <ResumeView projectId={projectId} canWrite={canWrite} archived={project.status === 'archived'} onSessionExpired={onSessionExpired} onOpenMemory={(checkpointId) => { setMemoryCheckpointId(checkpointId ?? null); setView('memory'); }} />
+        <ResumeView projectId={projectId} canWrite={canWrite} archived={project.status === 'archived'} onSessionExpired={onSessionExpired} onOpenMemory={(checkpointId) => goToTab('memory', checkpointId ? { checkpoint: checkpointId } : undefined)} />
       ) : view === 'development' ? (
         <DevelopmentView projectId={projectId} archived={project.status === 'archived'} canWrite={canWrite} onSessionExpired={onSessionExpired} />
       ) : view === 'roadmap' ? (
@@ -231,6 +253,8 @@ export function ProjectDetail({
         <MemoryView projectId={projectId} canWrite={canWrite} archived={project.status === 'archived'} onSessionExpired={onSessionExpired} checkpointToOpen={memoryCheckpointId} />
       ) : view === 'agent-runs' ? (
         <AgentRunsView projectId={projectId} canWrite={canWrite} archived={project.status === 'archived'} onSessionExpired={onSessionExpired} />
+      ) : view === 'timeline' ? (
+        <TimelineFeed scope="project" projectId={projectId} onSessionExpired={onSessionExpired} />
       ) : <>
 
       <article className="card">

@@ -188,6 +188,36 @@ h2 {
   font-family: var(--mono);
 }
 
+/* --- Link-styled buttons ----------------------------------------------------
+   A <button> that reads as a text link — used where the action is really
+   "navigate", not "submit", so keyboard/AT semantics stay button-correct
+   without looking like the form-submit style everywhere else. */
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: var(--accent);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+.link-button:hover,
+.link-button:focus-visible { text-decoration-thickness: 2px; }
+
+/* --- Timeline feed ----------------------------------------------------------- */
+.timeline-feed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.timeline-entry { gap: 0.35rem; }
+
 /* --- Status badges --------------------------------------------------------- */
 .badge {
   display: inline-flex;
@@ -400,17 +430,116 @@ button.primary {
 
 /* --- Tabs -------------------------------------------------------------- */
 .tab-nav { display: flex; gap: 0.35rem; }
-.tab-nav button {
+.tab-nav button,
+.tab-nav a {
   background: transparent;
   border: 1px solid transparent;
   color: var(--text-muted);
   font-weight: 600;
   padding: 0.4rem 0.75rem;
+  text-decoration: none;
+  border-radius: var(--radius);
 }
-.tab-nav button.tab-active {
+.tab-nav button.tab-active,
+.tab-nav a.tab-active {
   background: var(--surface-alt);
   border-color: var(--border);
   color: var(--text);
+}
+
+/* --- Global search ------------------------------------------------------- */
+.global-search { position: relative; min-width: 220px; }
+.global-search input[type="search"] {
+  width: 100%;
+  padding: 0.4rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+  color: var(--text);
+  font: inherit;
+}
+.global-search-results {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 0.35rem);
+  left: 0;
+  right: 0;
+  max-height: min(70vh, 480px);
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+  padding: 0.35rem;
+  gap: 0.25rem;
+}
+.global-search-status {
+  padding: 0.5rem 0.6rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+.global-search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: calc(var(--radius) - 4px);
+  padding: 0.55rem 0.6rem;
+  cursor: pointer;
+  color: var(--text);
+  font: inherit;
+}
+.global-search-result:hover,
+.global-search-result:focus-visible { background: var(--surface-alt); }
+.global-search-result mark {
+  background: var(--warn-bg);
+  color: var(--warn);
+  border-radius: 3px;
+  padding: 0 0.1em;
+}
+
+/* --- Project switcher ------------------------------------------------------ */
+.project-switcher { position: relative; }
+.project-switcher-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  min-width: 260px;
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  padding: 0.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.project-switcher-menu button {
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0.45rem 0.6rem;
+  border-radius: calc(var(--radius) - 4px);
+  cursor: pointer;
+  color: var(--text);
+  font: inherit;
+}
+.project-switcher-menu button:hover,
+.project-switcher-menu button:focus-visible { background: var(--surface-alt); }
+.project-switcher-menu .menu-heading {
+  font-size: 0.72rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  padding: 0.4rem 0.6rem 0.2rem;
 }
 
 /* --- Projects toolbar / filters ----------------------------------------- */

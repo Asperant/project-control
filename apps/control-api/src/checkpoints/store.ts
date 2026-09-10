@@ -4,7 +4,7 @@ import type { Db, DbClient } from '../db/pool.js';
 import { withTransaction } from '../db/pool.js';
 import { notFound } from '../errors.js';
 import { getProjectGuard, assertProjectMutable as assertProjectMutableBase, type Executor } from '../projects/guard.js';
-import type { MutationAudit } from '../roadmap/store.js';
+import type { MutationAudit, MutationTimeline } from '../roadmap/store.js';
 import { buildCheckpointSnapshot } from './snapshot.js';
 import type { RunnerClient } from '../runner/client.js';
 import { captureCheckpointGitState } from '../development/service.js';
@@ -46,6 +46,7 @@ export async function createCheckpointInTransaction(
   sessionNote: string | undefined,
   audit: MutationAudit,
   gitState: CheckpointGitState,
+  timeline: MutationTimeline,
 ): Promise<CheckpointDetail> {
   assertProjectMutable(project);
   const snapshot = await buildCheckpointSnapshot(client, project.id, project, gitState);
@@ -61,13 +62,17 @@ export async function createCheckpointInTransaction(
     snapshotVersion: snapshot.version,
     sessionNotePresent: Boolean(sessionNote),
   });
+  await timeline(client, {
+    entityType: 'checkpoint', entityId: id, eventType: 'checkpoint.created', projectId: project.id,
+    summary: `Checkpoint saved for "${project.name.slice(0, 90)}"`,
+  });
   const { rows } = await client.query<CheckpointRow>('SELECT * FROM project_checkpoints WHERE id=$1', [id]);
   return mapDetail(rows[0]!);
 }
 
 export async function createCheckpoint(
   db: Db, projectId: string, actorId: string, sessionNote: string | undefined, audit: MutationAudit,
-  runner: RunnerClient, requestId?: string,
+  runner: RunnerClient, timeline: MutationTimeline, requestId?: string,
 ): Promise<CheckpointDetail> {
   // Runner I/O deliberately happens before opening the PostgreSQL transaction.
   // Failure is represented in a compact unavailable snapshot and cannot block
@@ -84,7 +89,7 @@ export async function createCheckpoint(
     );
     const project = rows[0];
     if (!project) throw notFound('Project not found.');
-    return createCheckpointInTransaction(client, project, actorId, sessionNote, audit, gitState);
+    return createCheckpointInTransaction(client, project, actorId, sessionNote, audit, gitState, timeline);
   });
 }
 

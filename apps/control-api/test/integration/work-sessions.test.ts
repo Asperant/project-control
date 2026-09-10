@@ -248,6 +248,7 @@ describe.skipIf(!hasDocker)('Work Sessions', () => {
           if (eventType === 'work_session.closed') throw new Error('audit unavailable');
         },
         harness.ctx.runner,
+        async () => {},
       ),
     ).rejects.toThrow('audit unavailable');
     const stored = await harness.ctx.db.query<{ status: string; checkpoint_id: string | null }>(

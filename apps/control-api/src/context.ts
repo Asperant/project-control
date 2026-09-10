@@ -3,6 +3,7 @@ import type { AppConfig } from './config.js';
 import type { Db } from './db/pool.js';
 import type { Logger } from './logger.js';
 import type { AuditLog } from './audit.js';
+import type { TimelineLog } from './timeline.js';
 import type { SessionStore, AuthenticatedUser, SessionRecord } from './auth/session-store.js';
 import type { ServiceTokenStore } from './auth/service-token-store.js';
 import type { AutomationStore } from './automation/store.js';
@@ -19,6 +20,7 @@ export type AppContext = {
   db: Db;
   logger: Logger;
   audit: AuditLog;
+  timeline: TimelineLog;
   sessions: SessionStore;
   serviceTokens: ServiceTokenStore;
   automation: AutomationStore;

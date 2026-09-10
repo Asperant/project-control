@@ -17,7 +17,8 @@ import {
   upsertAgentRunPrompt,
 } from '../agent-runs/store.js';
 import { listMemoryBySourceAgentRun } from '../memory/store.js';
-import type { MutationAudit } from '../roadmap/store.js';
+import type { MutationAudit, MutationTimeline } from '../roadmap/store.js';
+import type { TimelineEntityType, TimelineEventType } from '../timeline.js';
 
 function parse<T>(schema: { safeParse: (v: unknown) => { success: boolean; data?: T; error?: z.ZodError } }, value: unknown): T {
   const result = schema.safeParse(value);
@@ -44,6 +45,19 @@ export const agentRunsRoutes = (ctx: AppContext): FastifyPluginAsync => async (a
       { eventType: eventType as AuditEventType, outcome: 'success', actorUserId: request.auth!.user.id, requestId: request.id, subject: `project:${String(detail['projectId'])}`, detail },
       client,
     );
+  const timelineFor = (request: FastifyRequest): MutationTimeline => async (client, entry) =>
+    ctx.timeline.recordRequired(
+      {
+        projectId: entry.projectId ?? null,
+        entityType: entry.entityType as TimelineEntityType,
+        entityId: entry.entityId,
+        eventType: entry.eventType as TimelineEventType,
+        summary: entry.summary,
+        actorUserId: request.auth!.user.id,
+        actorKind: 'user',
+      },
+      client,
+    );
 
   // --- Agent Runs --------------------------------------------------------
   app.get('/api/projects/:projectId/agent-runs', { preHandler: requireAuth }, async (request, reply) => {
@@ -58,7 +72,7 @@ export const agentRunsRoutes = (ctx: AppContext): FastifyPluginAsync => async (a
   app.post('/api/projects/:projectId/agent-runs', { preHandler: requireWriter }, async (request, reply) => {
     const { projectId } = ids(request);
     const body = parse(createAgentRunRequestSchema, request.body);
-    return reply.code(201).send({ agentRun: await createAgentRun(ctx.db, projectId!, request.auth!.user.id, body, auditFor(request)) });
+    return reply.code(201).send({ agentRun: await createAgentRun(ctx.db, projectId!, request.auth!.user.id, body, auditFor(request), timelineFor(request)) });
   });
   app.patch('/api/projects/:projectId/agent-runs/:runId', { preHandler: requireWriter }, async (request, reply) => {
     const { projectId, runId } = ids(request);
@@ -68,7 +82,7 @@ export const agentRunsRoutes = (ctx: AppContext): FastifyPluginAsync => async (a
   app.post('/api/projects/:projectId/agent-runs/:runId/status', { preHandler: requireWriter }, async (request, reply) => {
     const { projectId, runId } = ids(request);
     const body = parse(setAgentRunStatusRequestSchema, request.body);
-    return reply.send({ agentRun: await setAgentRunStatus(ctx.db, projectId!, runId!, body.status, auditFor(request)) });
+    return reply.send({ agentRun: await setAgentRunStatus(ctx.db, projectId!, runId!, body.status, auditFor(request), timelineFor(request)) });
   });
   app.post('/api/projects/:projectId/agent-runs/:runId/archive', { preHandler: requireWriter }, async (request, reply) => {
     const { projectId, runId } = ids(request);

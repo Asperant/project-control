@@ -7,7 +7,7 @@ import type { Db, DbClient } from '../db/pool.js';
 import { withTransaction } from '../db/pool.js';
 import { AppError, notFound } from '../errors.js';
 import { getProjectGuard, assertProjectMutable as assertProjectMutableBase, type Executor } from '../projects/guard.js';
-import type { MutationAudit } from '../roadmap/store.js';
+import type { MutationAudit, MutationTimeline } from '../roadmap/store.js';
 
 const SUBJECT = 'Memory';
 function assertProjectMutable(project: { id: string; status: string }): void {
@@ -153,12 +153,16 @@ export async function listMemoryBySourceAgentRun(db: Executor, projectId: string
 }
 
 export async function createMemoryEntry(
-  db: Db, projectId: string, actorId: string, input: CreateMemoryEntryRequest, audit: MutationAudit,
+  db: Db, projectId: string, actorId: string, input: CreateMemoryEntryRequest, audit: MutationAudit, timeline: MutationTimeline,
 ): Promise<MemoryEntry> {
   return withTransaction(db, async (client) => {
     assertProjectMutable(await getProjectGuard(client, projectId, true));
     const id = await insertEntry(client, projectId, actorId, input);
     await audit(client, 'memory.created', { projectId, entryId: id, type: input.type, importance: input.importance, isPinned: input.isPinned });
+    await timeline(client, {
+      entityType: 'memory', entityId: id, eventType: 'memory.created', projectId,
+      summary: `Memory created: "${input.title.slice(0, 100)}"`,
+    });
     return mapEntry(await loadEntry(client, projectId, id));
   });
 }
@@ -241,7 +245,7 @@ async function assertNoSupersedeCycle(client: DbClient, startId: string, forbidd
 }
 
 export async function supersedeMemoryEntry(
-  db: Db, projectId: string, oldEntryId: string, actorId: string, input: SupersedeMemoryEntryRequest, audit: MutationAudit,
+  db: Db, projectId: string, oldEntryId: string, actorId: string, input: SupersedeMemoryEntryRequest, audit: MutationAudit, timeline: MutationTimeline,
 ): Promise<{ oldEntry: MemoryEntry; newEntry: MemoryEntry }> {
   return withTransaction(db, async (client) => {
     assertProjectMutable(await getProjectGuard(client, projectId, true));
@@ -265,6 +269,10 @@ export async function supersedeMemoryEntry(
       loadEntry(client, projectId, oldEntryId).then(mapEntry),
       loadEntry(client, projectId, newEntryId).then(mapEntry),
     ]);
+    await timeline(client, {
+      entityType: 'memory', entityId: newEntryId, eventType: 'memory.superseded', projectId,
+      summary: `Memory superseded: "${oldEntry.title.slice(0, 90)}" → "${newEntry.title.slice(0, 90)}"`,
+    });
     return { oldEntry, newEntry };
   });
 }

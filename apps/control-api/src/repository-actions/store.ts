@@ -7,7 +7,7 @@ import type { Db, DbClient } from '../db/pool.js';
 import { withTransaction } from '../db/pool.js';
 import { AppError, badRequest, notFound } from '../errors.js';
 import { getProjectGuard, assertProjectMutable, type Executor } from '../projects/guard.js';
-import type { MutationAudit } from '../roadmap/store.js';
+import type { MutationAudit, MutationTimeline } from '../roadmap/store.js';
 import type { RunnerClient } from '../runner/client.js';
 import { RunnerUnavailableError } from '../runner/client.js';
 import {
@@ -224,7 +224,7 @@ function commitFailureResult(reason: RepositoryActionFailureReason, reconciledFr
  */
 export async function executeRepositoryAction(
   db: Db, runner: RunnerClient, projectId: string, actionId: string, actorId: string,
-  body: ExecuteRepositoryActionRequest, audit: MutationAudit, requestId?: string,
+  body: ExecuteRepositoryActionRequest, audit: MutationAudit, timeline: MutationTimeline, requestId?: string,
 ): Promise<RepositoryAction> {
   const project = await getProjectGuard(db, projectId);
   assertProjectMutable(project, 'Repository Actions');
@@ -326,6 +326,12 @@ export async function executeRepositoryAction(
       projectId, actionId, kind: 'git.commit',
       commitSha: result.commit?.commitSha ?? null, verified: result.commit?.verified ?? null,
       reason: result.reason,
+    });
+    await timeline(client, {
+      entityType: 'action', entityId: actionId, eventType: result.succeeded ? 'action.execution_succeeded' : 'action.execution_failed', projectId,
+      summary: result.succeeded
+        ? `Repository commit succeeded: "${plan.message.slice(0, 90)}"`
+        : `Repository commit failed: "${plan.message.slice(0, 70)}" (${result.reason ?? 'unknown reason'})`,
     });
     return mapAction(await loadActionRow(client, projectId, actionId));
   });

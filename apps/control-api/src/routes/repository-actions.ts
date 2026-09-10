@@ -8,7 +8,8 @@ import type { AuditEventType } from '../audit.js';
 import { createRequireAuth, requireRole } from '../auth/middleware.js';
 import type { AppContext } from '../context.js';
 import { AppError, badRequest } from '../errors.js';
-import type { MutationAudit } from '../roadmap/store.js';
+import type { MutationAudit, MutationTimeline } from '../roadmap/store.js';
+import type { TimelineEntityType, TimelineEventType } from '../timeline.js';
 import {
   cancelRepositoryAction, executeRepositoryAction, getRepositoryAction, listRepositoryActions,
   planGitCommit, reconcileRepositoryAction,
@@ -54,6 +55,19 @@ export const repositoryActionRoutes = (ctx: AppContext): FastifyPluginAsync => a
       },
       client,
     );
+  const timelineFor = (request: FastifyRequest): MutationTimeline => async (client, entry) =>
+    ctx.timeline.recordRequired(
+      {
+        projectId: entry.projectId ?? null,
+        entityType: entry.entityType as TimelineEntityType,
+        entityId: entry.entityId,
+        eventType: entry.eventType as TimelineEventType,
+        summary: entry.summary,
+        actorUserId: request.auth!.user.id,
+        actorKind: 'user',
+      },
+      client,
+    );
 
   app.get('/api/projects/:projectId/actions', { preHandler: requireAuth }, async (request, reply) => {
     const { projectId } = ids(request);
@@ -89,7 +103,7 @@ export const repositoryActionRoutes = (ctx: AppContext): FastifyPluginAsync => a
       const { projectId, actionId } = ids(request);
       const body = parse(executeRepositoryActionRequestSchema, request.body);
       const action = await executeRepositoryAction(
-        ctx.db, ctx.runner, projectId!, actionId!, request.auth!.user.id, body, auditFor(request), String(request.id),
+        ctx.db, ctx.runner, projectId!, actionId!, request.auth!.user.id, body, auditFor(request), timelineFor(request), String(request.id),
       );
       return reply.send({ action });
     },

@@ -7,7 +7,7 @@ import type { Db, DbClient } from '../db/pool.js';
 import { withTransaction } from '../db/pool.js';
 import { AppError, notFound } from '../errors.js';
 import { getProjectGuard, assertProjectMutable, type Executor } from '../projects/guard.js';
-import type { MutationAudit } from '../roadmap/store.js';
+import type { MutationAudit, MutationTimeline } from '../roadmap/store.js';
 import { createCheckpointInTransaction } from '../checkpoints/store.js';
 import type { RunnerClient } from '../runner/client.js';
 import { captureCheckpointGitState } from '../development/service.js';
@@ -139,7 +139,7 @@ export async function getLastClosedWorkSession(db: Executor, projectId: string):
 }
 
 export async function startWorkSession(
-  db: Db, projectId: string, actorId: string, body: StartWorkSessionRequest, audit: MutationAudit,
+  db: Db, projectId: string, actorId: string, body: StartWorkSessionRequest, audit: MutationAudit, timeline: MutationTimeline,
 ): Promise<WorkSession> {
   return withTransaction(db, async (client) => {
     assertProjectMutable(await getProjectGuard(client, projectId, true), 'Work Session');
@@ -156,6 +156,10 @@ export async function startWorkSession(
       throw error;
     }
     await audit(client, 'work_session.started', { projectId, workSessionId: id });
+    await timeline(client, {
+      entityType: 'work_session', entityId: id, eventType: 'work_session.started', projectId,
+      summary: `Work Session started: "${body.goal.slice(0, 100)}"`,
+    });
     return mapSession(await loadSessionRow(client, projectId, id));
   });
 }
@@ -175,7 +179,7 @@ export async function updateWorkSession(
 
 export async function closeWorkSession(
   db: Db, projectId: string, sessionId: string, actorId: string,
-  body: CloseWorkSessionRequest, audit: MutationAudit, runner: RunnerClient, requestId?: string,
+  body: CloseWorkSessionRequest, audit: MutationAudit, runner: RunnerClient, timeline: MutationTimeline, requestId?: string,
 ): Promise<WorkSession> {
   // Capture before opening the transaction; a runner failure becomes an
   // unavailable v3 Git state and never blocks an otherwise valid close.
@@ -197,7 +201,7 @@ export async function closeWorkSession(
     let checkpointId: string | null = null;
     if (body.createCheckpoint) {
       const checkpoint = await createCheckpointInTransaction(
-        client, project, actorId, body.checkpointSessionNote, audit, gitState!,
+        client, project, actorId, body.checkpointSessionNote, audit, gitState!, timeline,
       );
       checkpointId = checkpoint.id;
       await audit(client, 'work_session.checkpoint_created', {
@@ -216,6 +220,10 @@ export async function closeWorkSession(
       checkpointCreated: checkpointId !== null,
       blockersPresent: Boolean(body.blockers),
       nextActionPresent: Boolean(body.nextAction),
+    });
+    await timeline(client, {
+      entityType: 'work_session', entityId: sessionId, eventType: 'work_session.closed', projectId,
+      summary: `Work Session closed: "${current.goal.slice(0, 100)}"`,
     });
     return mapSession(await loadSessionRow(client, projectId, sessionId));
   });

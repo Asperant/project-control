@@ -1,6 +1,7 @@
 import pg from 'pg';
 import { buildApp } from './app.js';
 import { AuditLog } from './audit.js';
+import { TimelineLog } from './timeline.js';
 import { SessionStore } from './auth/session-store.js';
 import { ServiceTokenStore } from './auth/service-token-store.js';
 import { SERVICE_ACCOUNT_REGISTRY } from './auth/service-accounts.js';
@@ -89,6 +90,7 @@ async function main(): Promise<void> {
     db,
     logger,
     audit: new AuditLog(db, logger),
+    timeline: new TimelineLog(db, logger),
     sessions: new SessionStore(db, config),
     serviceTokens: new ServiceTokenStore(db),
     automation: new AutomationStore(db, automationManifest),

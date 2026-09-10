@@ -245,6 +245,15 @@ export const projectRoutes =
         requestId: request.id,
         detail: { projectId: created.project.id, name: created.project.name },
       });
+      await ctx.timeline.record({
+        projectId: created.project.id,
+        entityType: 'project',
+        entityId: created.project.id,
+        eventType: 'project.created',
+        summary: `Project registered: "${created.project.name.slice(0, 100)}"`,
+        actorUserId: userId,
+        actorKind: 'user',
+      });
 
       const responseBody: ProjectResponse = {
         project: toProjectDetail(created.project, created.technologies, created.rules, created.commands),
@@ -312,6 +321,11 @@ export const projectRoutes =
         requestId: request.id,
         detail: { projectId: id },
       });
+      await ctx.timeline.record({
+        projectId: id, entityType: 'project', entityId: id, eventType: 'project.archived',
+        summary: `Project archived: "${project.name.slice(0, 100)}"`,
+        actorUserId: request.auth!.user.id, actorKind: 'user',
+      });
 
       const [technologies, rules, commands] = await Promise.all([
         listTechnologies(ctx.db, id),
@@ -332,6 +346,11 @@ export const projectRoutes =
         actorUserId: request.auth!.user.id,
         requestId: request.id,
         detail: { projectId: id },
+      });
+      await ctx.timeline.record({
+        projectId: id, entityType: 'project', entityId: id, eventType: 'project.reactivated',
+        summary: `Project reactivated: "${project.name.slice(0, 100)}"`,
+        actorUserId: request.auth!.user.id, actorKind: 'user',
       });
 
       const [technologies, rules, commands] = await Promise.all([
