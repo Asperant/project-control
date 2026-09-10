@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { DevelopmentStateResponse } from '@project-control/contracts';
-import { ApiError, api } from '../../api-client';
+import { api } from '../../api-client';
 import { ActionsPanel } from './ActionsPanel';
+import { useApiErrorHandler } from '../../hooks/useApiErrorHandler';
+import { ErrorAlert } from '../ErrorAlert';
 
 type Props = { projectId: string; archived: boolean; canWrite: boolean; onSessionExpired: () => void; initialData?: DevelopmentStateResponse };
 
@@ -18,7 +20,7 @@ function comparisonLines(value: DevelopmentStateResponse['checkpointComparison']
 export function DevelopmentView({ projectId, archived, canWrite, onSessionExpired, initialData }: Props): React.JSX.Element {
   const [state, setState] = useState<DevelopmentStateResponse | null>(initialData ?? null);
   const [loading, setLoading] = useState(!initialData);
-  const [error, setError] = useState<string | null>(null);
+  const { error, setError, handleError } = useApiErrorHandler(onSessionExpired, 'Development State could not be loaded.');
 
   const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -27,12 +29,11 @@ export function DevelopmentView({ projectId, archived, canWrite, onSessionExpire
       setError(null);
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === 'AbortError') return;
-      if (caught instanceof ApiError && caught.isAuthFailure) onSessionExpired();
-      else setError(caught instanceof ApiError ? caught.message : 'Development State could not be loaded.');
+      handleError(caught);
     } finally {
       setLoading(false);
     }
-  }, [onSessionExpired, projectId]);
+  }, [handleError, projectId, setError]);
 
   useEffect(() => {
     if (initialData) return;
@@ -42,7 +43,7 @@ export function DevelopmentView({ projectId, archived, canWrite, onSessionExpire
   }, [initialData, load]);
 
   if (loading && !state) return <p role="status">Loading Development State…</p>;
-  if (!state) return <div className="alert alert-error" role="alert">{error ?? 'Development State is unavailable.'} <button type="button" onClick={() => void load()}>Retry</button></div>;
+  if (!state) return <div className="alert alert-error" role="alert">{error?.message ?? 'Development State is unavailable.'}{error?.requestId && <> <code>{error.requestId}</code></>} <button type="button" onClick={() => void load()}>Retry</button></div>;
 
   const liveMetadataAvailable = state.status === 'available';
   const unavailableCopy = state.status === 'not_repository'
@@ -53,7 +54,7 @@ export function DevelopmentView({ projectId, archived, canWrite, onSessionExpire
     <section className="development-view" aria-labelledby="development-heading">
       <div className="card-head"><h2 id="development-heading">Development</h2><button type="button" disabled={loading} onClick={() => void load()}>{loading ? 'Refreshing…' : 'Refresh'}</button></div>
       {archived && <div className="alert alert-warn" role="status">This archived project's Development State remains readable and read-only.</div>}
-      {error && <div className="alert alert-error" role="alert">{error}</div>}
+      <ErrorAlert error={error?.message ?? null} requestId={error?.requestId ?? null} />
       {state.attention.length > 0 && <div className="alert alert-warn"><strong>Attention</strong><ul>{state.attention.map((item) => <li key={item.key}>{item.label}</li>)}</ul></div>}
 
       <article className="card"><h3>1. Repository Status</h3>

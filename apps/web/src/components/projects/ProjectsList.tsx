@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ListProjectsQuery, ProjectPriority, ProjectStatus, ProjectSummary } from '@project-control/contracts';
-import { ApiError, api } from '../../api-client';
+import { api } from '../../api-client';
 import { AccessibilityBadge, ProjectPriorityBadge, ProjectStatusBadge, formatRelativeTime } from './badges';
+import { useApiErrorHandler } from '../../hooks/useApiErrorHandler';
+import { ErrorAlert } from '../ErrorAlert';
 
 const PAGE_SIZE = 20;
 
@@ -27,7 +29,7 @@ export function ProjectsList({
   const [sort, setSort] = useState<ListProjectsQuery['sort']>('updatedAt');
   const [order, setOrder] = useState<ListProjectsQuery['order']>('desc');
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { error, setError, handleError } = useApiErrorHandler(onSessionExpired, 'Unable to load projects.');
 
   const refresh = useCallback(
     async (signal?: AbortSignal) => {
@@ -52,20 +54,12 @@ export function ProjectsList({
         setError(null);
       } catch (caught) {
         if (caught instanceof DOMException && caught.name === 'AbortError') return;
-        if (caught instanceof ApiError) {
-          if (caught.isAuthFailure) {
-            onSessionExpired();
-            return;
-          }
-          setError(caught.message);
-        } else {
-          setError('Unable to load projects.');
-        }
+        handleError(caught);
       } finally {
         setLoading(false);
       }
     },
-    [page, search, status, priority, technology, includeArchived, sort, order, onSessionExpired],
+    [page, search, status, priority, technology, includeArchived, sort, order, handleError, setError],
   );
 
   useEffect(() => {
@@ -151,11 +145,7 @@ export function ProjectsList({
         </button>
       </div>
 
-      {error && (
-        <div className="alert alert-error" role="alert">
-          {error}
-        </div>
-      )}
+      <ErrorAlert error={error?.message ?? null} requestId={error?.requestId ?? null} />
 
       {loading && !projects && <p>Loading projects…</p>}
 

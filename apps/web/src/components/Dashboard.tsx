@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import type {
   ArtifactSelfTestResponse,
@@ -7,6 +7,8 @@ import type {
 } from '@project-control/contracts';
 import { ApiError, api } from '../api-client';
 import { StatusBadge } from './StatusBadge';
+import { ErrorAlert } from './ErrorAlert';
+import { useApiErrorHandler } from '../hooks/useApiErrorHandler';
 import { ProjectsRoot } from './projects/ProjectsRoot';
 import { ProjectSwitcher } from './projects/ProjectSwitcher';
 import { AutomationView } from './automation/AutomationView';
@@ -14,6 +16,31 @@ import { GlobalSearch } from './search/GlobalSearch';
 import { GlobalTimelineView } from './timeline/GlobalTimelineView';
 
 const POLL_INTERVAL_MS = 15_000;
+
+/**
+ * Per-route `document.title` for screen readers and browser tabs alike. Kept
+ * to a per-section title rather than plumbing project names through here —
+ * see the route-change effect below for why per-project titles aren't worth
+ * the extra wiring.
+ */
+function titleForPath(pathname: string): string {
+  const section =
+    pathname.startsWith('/timeline') ? 'Activity'
+    : pathname.startsWith('/automation') ? 'Automation'
+    : pathname.startsWith('/system') ? 'System'
+    : pathname.startsWith('/projects/new') ? 'New Project'
+    : /^\/projects\/[^/]+\/rescan/.test(pathname) ? 'Rescan'
+    : /^\/projects\/[^/]+\/roadmap/.test(pathname) ? 'Roadmap'
+    : /^\/projects\/[^/]+\/memory/.test(pathname) ? 'Memory'
+    : /^\/projects\/[^/]+\/agent-runs/.test(pathname) ? 'Agent Runs'
+    : /^\/projects\/[^/]+\/resume/.test(pathname) ? 'Resume'
+    : /^\/projects\/[^/]+\/development/.test(pathname) ? 'Development'
+    : /^\/projects\/[^/]+\/timeline/.test(pathname) ? 'Project Timeline'
+    : /^\/projects\/[^/]+/.test(pathname) ? 'Project'
+    : pathname.startsWith('/projects') ? 'Projects'
+    : null;
+  return section ? `Project Control — ${section}` : 'Project Control';
+}
 
 const TOP_TABS = [
   { path: '/projects', label: 'Projects' },
@@ -40,6 +67,21 @@ export function Dashboard({
   const canWriteProjects = session.user.role === 'admin' || session.user.role === 'operator';
   const canWriteAutomation = session.user.role === 'admin' || session.user.role === 'operator';
   const isAdmin = session.user.role === 'admin';
+
+  // Client-side routing swaps whole screens without a page load, which gives
+  // a screen-reader user no signal that anything changed. Set a per-route
+  // title and move focus to the main region on every navigation — but not
+  // on first mount, where that would steal focus from wherever the browser
+  // naturally put it.
+  const isFirstRender = useRef(true);
+  useEffect(() => {
+    document.title = titleForPath(location.pathname);
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
+    document.getElementById('main-content')?.focus();
+  }, [location.pathname]);
 
   return (
     <>
@@ -73,7 +115,7 @@ export function Dashboard({
         </div>
       </header>
 
-      <main id="main-content">
+      <main id="main-content" tabIndex={-1}>
         <Routes>
           <Route path="/" element={<Navigate to="/projects" replace />} />
           <Route path="/projects/*" element={<ProjectsRoot canWrite={canWriteProjects} onSessionExpired={onSessionExpired} />} />
@@ -113,10 +155,11 @@ function SystemPanel({
   onSessionExpired: () => void;
 }): React.JSX.Element {
   const [status, setStatus] = useState<SystemStatusResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { error, setError, handleError } = useApiErrorHandler(onSessionExpired, 'Unable to load system status.');
   const [loading, setLoading] = useState(true);
   const [selfTest, setSelfTest] = useState<ArtifactSelfTestResponse | null>(null);
   const [selfTestError, setSelfTestError] = useState<string | null>(null);
+  const [selfTestRequestId, setSelfTestRequestId] = useState<string | null>(null);
   const [selfTestBusy, setSelfTestBusy] = useState(false);
 
   const refresh = useCallback(
@@ -127,22 +170,14 @@ function SystemPanel({
         setError(null);
       } catch (caught) {
         if (caught instanceof DOMException && caught.name === 'AbortError') return;
-        if (caught instanceof ApiError) {
-          // An expired session must bounce the user to the login screen rather
-          // than leaving a dashboard that silently stops updating.
-          if (caught.isAuthFailure) {
-            onSessionExpired();
-            return;
-          }
-          setError(caught.message);
-        } else {
-          setError('Unable to load system status.');
-        }
+        // An expired session must bounce the user to the login screen rather
+        // than leaving a dashboard that silently stops updating.
+        handleError(caught);
       } finally {
         setLoading(false);
       }
     },
-    [onSessionExpired],
+    [handleError, setError],
   );
 
   useEffect(() => {
@@ -170,6 +205,7 @@ function SystemPanel({
   async function handleSelfTest(): Promise<void> {
     setSelfTestBusy(true);
     setSelfTestError(null);
+    setSelfTestRequestId(null);
     try {
       setSelfTest(await api.artifactSelfTest());
       void refresh();
@@ -181,6 +217,7 @@ function SystemPanel({
           return;
         }
         setSelfTestError(caught.message);
+        setSelfTestRequestId(caught.requestId ?? null);
       } else {
         setSelfTestError('The self-test could not be started.');
       }
@@ -202,7 +239,12 @@ function SystemPanel({
 
       {error && (
           <div className="alert alert-error" role="alert">
-            {error}
+            {error.message}
+            {error.requestId && (
+              <p className="hint">
+                Request ID: <code>{error.requestId}</code>
+              </p>
+            )}
             <p className="hint">
               The panel keeps retrying every {POLL_INTERVAL_MS / 1000} s. If this persists, run{' '}
               <code>./pcctl health</code> on the host.
@@ -261,9 +303,7 @@ function SystemPanel({
               </button>
             </div>
 
-            {selfTestError && (
-              <div className="alert alert-error" role="alert">{selfTestError}</div>
-            )}
+            <ErrorAlert error={selfTestError} requestId={selfTestRequestId} />
 
             {selfTest && (
               <div role="status">

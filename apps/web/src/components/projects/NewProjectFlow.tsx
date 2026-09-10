@@ -10,7 +10,9 @@ import type {
   RuleCategory,
   TechnologyCategory,
 } from '@project-control/contracts';
-import { ApiError, api } from '../../api-client';
+import { api } from '../../api-client';
+import { useApiErrorHandler } from '../../hooks/useApiErrorHandler';
+import { ErrorAlert } from '../ErrorAlert';
 
 /**
  * Register a project screen: type a folder path → inspect (server-side,
@@ -30,7 +32,7 @@ export function NewProjectFlow({
 }): React.JSX.Element {
   const [path, setPath] = useState('');
   const [inspecting, setInspecting] = useState(false);
-  const [inspectError, setInspectError] = useState<string | null>(null);
+  const { error: inspectError, setError: setInspectError, handleError: handleInspectError } = useApiErrorHandler(onSessionExpired, 'The folder could not be inspected.');
   const [inspection, setInspection] = useState<ProjectInspectionResponse | null>(null);
 
   const [name, setName] = useState('');
@@ -53,7 +55,7 @@ export function NewProjectFlow({
   const [newCommandText, setNewCommandText] = useState('');
 
   const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const { error: saveError, setError: setSaveError, handleError: handleSaveError } = useApiErrorHandler(onSessionExpired, 'The project could not be saved.');
 
   async function handleInspect(): Promise<void> {
     setInspecting(true);
@@ -84,15 +86,7 @@ export function NewProjectFlow({
         })),
       );
     } catch (caught) {
-      if (caught instanceof ApiError) {
-        if (caught.isAuthFailure) {
-          onSessionExpired();
-          return;
-        }
-        setInspectError(caught.message);
-      } else {
-        setInspectError('The folder could not be inspected.');
-      }
+      handleInspectError(caught);
     } finally {
       setInspecting(false);
     }
@@ -122,15 +116,7 @@ export function NewProjectFlow({
       });
       onCreated(created.project.id);
     } catch (caught) {
-      if (caught instanceof ApiError) {
-        if (caught.isAuthFailure) {
-          onSessionExpired();
-          return;
-        }
-        setSaveError(caught.message);
-      } else {
-        setSaveError('The project could not be saved.');
-      }
+      handleSaveError(caught);
     } finally {
       setSaving(false);
     }
@@ -159,11 +145,7 @@ export function NewProjectFlow({
             Enter the full path to a folder that already exists on the Ubuntu host. It must be inside a
             configured allowed root — the panel never browses the filesystem for you.
           </p>
-          {inspectError && (
-            <div className="alert alert-error" role="alert">
-              {inspectError}
-            </div>
-          )}
+          <ErrorAlert error={inspectError?.message ?? null} requestId={inspectError?.requestId ?? null} />
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             <button type="button" className="primary" disabled={!path.trim() || inspecting} onClick={() => void handleInspect()}>
               {inspecting ? 'Inspecting…' : 'Inspect'}
@@ -405,11 +387,7 @@ export function NewProjectFlow({
         </div>
       </article>
 
-      {saveError && (
-        <div className="alert alert-error" role="alert">
-          {saveError}
-        </div>
-      )}
+      <ErrorAlert error={saveError?.message ?? null} requestId={saveError?.requestId ?? null} />
 
       <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
         <button type="button" className="primary" disabled={!name.trim() || saving} onClick={() => void handleSave()}>

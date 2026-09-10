@@ -203,6 +203,7 @@ h2 {
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 0.15em;
+  overflow-wrap: anywhere;
 }
 .link-button:hover,
 .link-button:focus-visible { text-decoration-thickness: 2px; }
@@ -492,15 +493,18 @@ button.primary {
   cursor: pointer;
   color: var(--text);
   font: inherit;
+  min-width: 0;
 }
 .global-search-result:hover,
-.global-search-result:focus-visible { background: var(--surface-alt); }
+.global-search-result:focus-visible,
+.global-search-result.is-highlighted { background: var(--surface-alt); }
 .global-search-result mark {
   background: var(--warn-bg);
   color: var(--warn);
   border-radius: 3px;
   padding: 0 0.1em;
 }
+.global-search-result .card-title { overflow-wrap: anywhere; }
 
 /* --- Project switcher ------------------------------------------------------ */
 .project-switcher { position: relative; }
@@ -532,7 +536,8 @@ button.primary {
   font: inherit;
 }
 .project-switcher-menu button:hover,
-.project-switcher-menu button:focus-visible { background: var(--surface-alt); }
+.project-switcher-menu button:focus-visible,
+.project-switcher-menu button.is-highlighted { background: var(--surface-alt); }
 .project-switcher-menu .menu-heading {
   font-size: 0.72rem;
   font-weight: 650;
@@ -771,6 +776,20 @@ code {
 .actions-status-cancelled { color: var(--text-muted); background: transparent; }
 .actions-status-planned,
 .actions-status-running { color: var(--warn); background: var(--warn-bg); }
+
+@media (max-width:640px){
+  .development-view button,.development-view select,.development-view input[type="checkbox"],
+  .actions-panel button,.actions-panel select,.actions-panel input[type="checkbox"],.actions-panel input[type="text"],.actions-panel textarea{min-height:44px}
+  .development-view .card{padding:.8rem}
+  .actions-panel{padding:.8rem}
+  .timeline-entry{padding:.8rem}
+  .timeline-feed + button{min-height:44px}
+  .timeline-entry .link-button{min-height:44px}
+  .global-search input[type="search"]{min-height:44px}
+  .global-search-result{min-height:44px}
+  .project-switcher-menu input[type="search"]{min-height:44px}
+  .project-switcher-menu button{min-height:44px}
+}
 
 /* --- Motion ---------------------------------------------------------------- */
 @media (prefers-reduced-motion: reduce) {

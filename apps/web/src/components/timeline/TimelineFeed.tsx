@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { TimelineEntry } from '@project-control/contracts';
-import { ApiError, api } from '../../api-client';
+import { api } from '../../api-client';
 import { EntityTypeBadge, entityLink } from './links';
+import { ErrorAlert } from '../ErrorAlert';
+import { useApiErrorHandler } from '../../hooks/useApiErrorHandler';
 
 const PAGE_SIZE = 30;
 
@@ -26,23 +28,7 @@ export function TimelineFeed({
   const [nextCursor, setNextCursor] = useState<{ occurredAt: string; id: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleError = useCallback(
-    (caught: unknown): void => {
-      if (caught instanceof DOMException && caught.name === 'AbortError') return;
-      if (caught instanceof ApiError) {
-        if (caught.isAuthFailure) {
-          onSessionExpired();
-          return;
-        }
-        setError(caught.message);
-      } else {
-        setError('Unable to load the activity feed.');
-      }
-    },
-    [onSessionExpired],
-  );
+  const { error, setError, handleError } = useApiErrorHandler(onSessionExpired, 'Unable to load the activity feed.');
 
   const load = useCallback(
     async (signal?: AbortSignal): Promise<void> => {
@@ -92,7 +78,7 @@ export function TimelineFeed({
   }
 
   if (loading) return <p>Loading activity…</p>;
-  if (error) return <div className="alert alert-error" role="alert">{error}</div>;
+  if (error) return <ErrorAlert error={error.message} requestId={error.requestId} />;
   if (entries.length === 0) return <p className="hint">No activity yet.</p>;
 
   return (

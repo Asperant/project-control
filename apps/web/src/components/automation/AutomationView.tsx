@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { WorkflowRun, WorkflowRunStatus, WorkflowSummary } from '@project-control/contracts';
-import { ApiError, api } from '../../api-client';
+import { api } from '../../api-client';
 import { AutomationRunDetail } from './AutomationRunDetail';
 import { RunStatusBadge, SeverityBadge } from './badges';
 import { ServiceTokensPanel } from './ServiceTokensPanel';
+import { useApiErrorHandler } from '../../hooks/useApiErrorHandler';
+import { ErrorAlert } from '../ErrorAlert';
 
 const PAGE_SIZE = 20;
 const formatTime = (iso: string): string => new Date(iso).toLocaleString();
@@ -30,18 +32,9 @@ export function AutomationView({
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState<WorkflowRunStatus | 'all'>('all');
-  const [error, setError] = useState<string | null>(null);
+  const { error, setError, handleError } = useApiErrorHandler(onSessionExpired);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-
-  const handleError = useCallback((caught: unknown, fallback: string) => {
-    if (caught instanceof ApiError) {
-      if (caught.isAuthFailure) { onSessionExpired(); return; }
-      setError(caught.message);
-    } else {
-      setError(fallback);
-    }
-  }, [onSessionExpired]);
 
   const loadWorkflows = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -128,7 +121,7 @@ export function AutomationView({
         </nav>
       </div>
 
-      {error && <div className="alert alert-error" role="alert">{error}</div>}
+      <ErrorAlert error={error?.message ?? null} requestId={error?.requestId ?? null} />
 
       {subTab === 'workflows' && (
         <div className="card-grid">

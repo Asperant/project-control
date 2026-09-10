@@ -4,8 +4,10 @@ import type {
   AgentReport, AgentRun, AgentRunPrompt, AgentRunTimelineEntry, AgentValidationStatus,
   CreateMemoryEntryRequest, MemoryEntry, MemoryImportance, MemoryType, RoadmapMilestone,
 } from '@project-control/contracts';
-import { ApiError, api } from '../../api-client';
+import { api } from '../../api-client';
 import type { RelatedOptions } from './AgentRunsView';
+import { useApiErrorHandler } from '../../hooks/useApiErrorHandler';
+import { ErrorAlert } from '../ErrorAlert';
 
 const formatTime = (iso: string): string => new Date(iso).toLocaleString();
 const validationStatuses: AgentValidationStatus[] = ['not_reviewed', 'under_review', 'accepted', 'accepted_with_changes', 'rejected'];
@@ -33,7 +35,7 @@ export function AgentRunDetail({
   const [reports, setReports] = useState<AgentReport[]>([]);
   const [timeline, setTimeline] = useState<AgentRunTimelineEntry[]>([]);
   const [relatedMemory, setRelatedMemory] = useState<MemoryEntry[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const { error, setError, handleError } = useApiErrorHandler(onSessionExpired, 'The Agent Run request failed.');
   const [busy, setBusy] = useState(false);
 
   const [editingMeta, setEditingMeta] = useState(false);
@@ -51,15 +53,6 @@ export function AgentRunDetail({
 
   const archived = projectArchived || Boolean(agentRun?.archivedAt);
   const writable = canWrite && !archived;
-
-  const handleError = useCallback((caught: unknown) => {
-    if (caught instanceof ApiError) {
-      if (caught.isAuthFailure) { onSessionExpired(); return; }
-      setError(caught.message);
-    } else {
-      setError('The Agent Run request failed.');
-    }
-  }, [onSessionExpired]);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -121,7 +114,7 @@ export function AgentRunDetail({
     }
   }
 
-  if (!agentRun) return <p>{error ?? 'Loading Agent Run…'}</p>;
+  if (!agentRun) return <p>{error?.message ?? 'Loading Agent Run…'}</p>;
 
   const currentDraftReport = reports.find((r) => r.status === 'draft') ?? null;
   const currentFinalReport = reports.find((r) => r.status === 'final') ?? null;
@@ -136,7 +129,7 @@ export function AgentRunDetail({
         <span className="badge badge-manual">{agentRun.agentName}</span>
       </div>
 
-      {error && <div className="alert alert-error" role="alert">{error}</div>}
+      <ErrorAlert error={error?.message ?? null} requestId={error?.requestId ?? null} />
       {archived && <div className="alert alert-warn" role="status">This Agent Run is archived. Changes are disabled.</div>}
 
       {/* --- Overview ---------------------------------------------------- */}

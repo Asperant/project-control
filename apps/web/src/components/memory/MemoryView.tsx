@@ -3,7 +3,10 @@ import type {
   CheckpointDetail, CheckpointSummary, CreateMemoryEntryRequest, MemoryEntry, MemoryImportance,
   MemoryType, ProjectContextResponse, RoadmapMilestone,
 } from '@project-control/contracts';
-import { ApiError, api } from '../../api-client';
+import { api } from '../../api-client';
+import { useModalDialog } from '../../hooks/useModalDialog';
+import { useApiErrorHandler } from '../../hooks/useApiErrorHandler';
+import { ErrorAlert } from '../ErrorAlert';
 
 const memoryTypes: MemoryType[] = ['decision', 'constraint', 'context', 'finding', 'handoff', 'lesson'];
 const importances: MemoryImportance[] = ['normal', 'important', 'critical'];
@@ -24,7 +27,7 @@ export function MemoryView({
   const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
   const [showArchivedCheckpoints, setShowArchivedCheckpoints] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { error, setError, handleError } = useApiErrorHandler(onSessionExpired, 'The memory request failed.');
   const [busy, setBusy] = useState(false);
   const [showWhereWasI, setShowWhereWasI] = useState(false);
   const [showAddMemory, setShowAddMemory] = useState(false);
@@ -35,15 +38,6 @@ export function MemoryView({
   const [sessionNote, setSessionNote] = useState('');
 
   const writable = canWrite && !archived;
-
-  const handleError = useCallback((caught: unknown) => {
-    if (caught instanceof ApiError) {
-      if (caught.isAuthFailure) { onSessionExpired(); return; }
-      setError(caught.message);
-    } else {
-      setError('The memory request failed.');
-    }
-  }, [onSessionExpired]);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -114,13 +108,13 @@ export function MemoryView({
     if (checkpointToOpen) void openCheckpoint(checkpointToOpen);
   }, [checkpointToOpen]);
 
-  if (!context) return <p>{error ?? 'Loading memory…'}</p>;
+  if (!context) return <p>{error?.message ?? 'Loading memory…'}</p>;
 
   return (
     <section aria-labelledby="memory-heading" className="memory-view">
       <h2 id="memory-heading">Memory</h2>
       {archived && <div className="alert alert-warn" role="status">This project is archived. Memory changes are disabled.</div>}
-      {error && <div className="alert alert-error" role="alert">{error}</div>}
+      <ErrorAlert error={error?.message ?? null} requestId={error?.requestId ?? null} />
 
       <CurrentContextCard context={context} expanded={showWhereWasI} onToggle={() => setShowWhereWasI(!showWhereWasI)} />
 
@@ -476,9 +470,10 @@ function MemoryCard({
 
 function CheckpointDetailDialog({ checkpoint, onClose }: { checkpoint: CheckpointDetail; onClose: () => void }): React.JSX.Element {
   const s = checkpoint.snapshot;
+  const { containerRef } = useModalDialog<HTMLDivElement>({ open: true, onClose });
   return (
     <div className="checkpoint-dialog-backdrop" role="presentation" onClick={onClose}>
-      <div className="checkpoint-dialog card" role="dialog" aria-modal="true" aria-label="Checkpoint detail" onClick={(e) => e.stopPropagation()}>
+      <div ref={containerRef} className="checkpoint-dialog card" role="dialog" aria-modal="true" aria-label="Checkpoint detail" onClick={(e) => e.stopPropagation()}>
         <div className="card-head">
           <span className="card-title">Checkpoint — {formatTime(checkpoint.createdAt)}</span>
           <button type="button" onClick={onClose} aria-label="Close checkpoint detail">×</button>
