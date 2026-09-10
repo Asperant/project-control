@@ -71,6 +71,40 @@ into `running`. Severity → notification policy is decided server-side from
 the manifest at settle time, never by a workflow's own logic. See
 [automation.md](automation.md).
 
+## Search and timeline domain
+
+Two read-time features layered on existing data, added nothing to any write
+path. `timeline_events` (migrations `0019`/`0020`) is a curated, append-only
+activity feed: application code — not a trigger — inserts one row per
+notable mutation, the same pattern `audit_events` already uses, with a short,
+already-redacted, human-readable summary line (never an entity's own
+body/prompt/report/snapshot content). `GET /api/timeline` and
+`GET /api/projects/:id/timeline` read it back, keyset-paginated on
+`(occurred_at, id)`. `request_id` (migration `0023`) mirrors
+`audit_events.request_id`, closing a correlation gap: most call sites already
+write both an audit row and a timeline row for the same mutation, and now
+both carry the same request id.
+
+Full-text search (migration `0021`) is the opposite kind of feature:
+read-time only, computed directly over each searchable table's own content
+via a generated, stored `tsvector` column and a GIN index (`projects`,
+`roadmap_milestones`, `roadmap_tasks`, `project_memory_entries`,
+`project_checkpoints`, `agent_runs`, `agent_run_prompts`, `agent_reports`,
+`work_sessions`) — it does not read `timeline_events` at all. `GET
+/api/search` (`apps/control-api/src/search/store.ts`) unions a
+`ts_headline`-derived excerpt from each table and never returns more than a
+caller could already see through that entity's own endpoint. See
+[search-timeline-acceptance.md](search-timeline-acceptance.md).
+
+On the frontend, this feature also introduced the panel's first client-side
+router (`react-router-dom`'s `BrowserRouter`, wired in `apps/web/src/main.tsx`)
+— every screen that used to be local `useState` navigation is now a real
+route (`/projects`, `/projects/new`, `/projects/:id/*`, `/timeline`,
+`/automation`, `/system`), and global search
+(`apps/web/src/components/search/GlobalSearch.tsx`) and the activity feed
+(`apps/web/src/components/timeline/TimelineFeed.tsx`) navigate by pushing a
+URL rather than flipping component state.
+
 ## Overview
 
 ```
@@ -116,7 +150,7 @@ TypeScript on Fastify 5. Owns authentication, sessions, the audit trail, the
 artifact store and the runner client. Talks to PostgreSQL as `control_app` — a
 role with no DDL rights and no ability to modify audit history.
 
-Stage 1 surface:
+Foundation surface:
 
 | Route | Auth | Purpose |
 | --- | --- | --- |
@@ -133,7 +167,7 @@ only from inside the container network — Docker's healthcheck runs there.
 
 ### Project registration surface
 
-Added alongside the Stage 1 routes above; see
+Added alongside the foundation routes above; see
 [`project-registration.md`](project-registration.md) for the full user-facing
 flow and [`security-model.md`](security-model.md#11-project-registration) for
 the security design.
@@ -166,6 +200,14 @@ only to `/api` on its own origin, which is what allows the session cookie to be
 `SameSite=Strict`. There is no configurable API base URL and no cross-origin
 request anywhere in the bundle.
 
+Client-side routing is `react-router-dom`'s `BrowserRouter` (`main.tsx`),
+introduced with the search/timeline feature — see the Search and timeline
+domain section above. The panel's two hand-rolled `role="dialog"` overlays
+(the checkpoint detail dialog in `MemoryView` and the session dialogs in
+`ResumeView`) share a focus-trap/initial-focus/Escape-to-close/focus-restore
+convention via the `useModalDialog` hook
+(`apps/web/src/hooks/useModalDialog.ts`) rather than each reimplementing it.
+
 ### Runner (`apps/runner`)
 
 A Go binary on the **host**, run by systemd as `project-runner`. It exists
@@ -186,7 +228,7 @@ Design constraints, all enforced rather than documented-only:
 - **No third-party dependencies.** Standard library only, so the supply chain of
   the one host-resident component is this repository.
 
-Stage 1 operations: `system.health`, `runner.selftest`. Both read-only.
+Foundation operations: `system.health`, `runner.selftest`. Both read-only.
 
 Project-registration operations: `project.path.validate`, `project.inspect`,
 `project.git.summary`, `project.git.development`, `project.git.write.status`.
@@ -328,7 +370,7 @@ so a later stage can add one without touching callers.
 
 ### Database
 
-Stage 1 tables: `users`, `sessions`, `audit_events`, `schema_migrations`,
+Foundation tables: `users`, `sessions`, `audit_events`, `schema_migrations`,
 `system_settings`, `artifact_objects`.
 
 Project-registration tables (migrations `0003`/`0004`): `projects` (location
@@ -376,6 +418,18 @@ timestamp, is not a transition) and freezes a row once it reaches a terminal
 status. `control_app` cannot `DELETE` from `workflow_runs`; it cannot
 `UPDATE` `workflow_run_steps` at all. `backup_reader` remains SELECT-only on
 both. See [automation.md](automation.md).
+
+Search and timeline tables/columns (migrations `0019`/`0020`/`0021`/`0023`):
+`timeline_events`, append-only at the grant level like `audit_events`, with a
+`request_id` column (`0023`) mirroring `audit_events.request_id`; and a
+generated, stored `search_vector tsvector` column plus a GIN index added to
+each of the eight tables full-text search covers (`projects`,
+`roadmap_milestones`, `roadmap_tasks`, `project_memory_entries`,
+`project_checkpoints`, `agent_runs`, `agent_run_prompts`, `agent_reports`,
+`work_sessions`). No new grants were needed for `0021`: `control_app` already
+had `SELECT` on every table involved, and a generated column is populated by
+`control_migrator`'s own `INSERT`/`UPDATE`, not a separate write path. See
+[search-timeline-acceptance.md](search-timeline-acceptance.md).
 
 Development State adds no table or migration. Live Git metadata is not cached
 in PostgreSQL; only compact Git state is persisted inside new immutable

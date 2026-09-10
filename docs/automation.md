@@ -2,7 +2,7 @@
 
 ## Principle
 
-n8n has been part of this platform since Stage 1 — pinned, hardened, database-backed,
+n8n has been part of this platform since the foundation build — pinned, hardened, database-backed,
 never routed through Caddy — but until this feature it had no legitimate way to
 call the Control API at all. It could only ever be an outbound notifier
 (`infra/n8n/workflows/telegram-notification.example.json`). This feature gives it
@@ -31,7 +31,7 @@ A fresh deployment has a validated manifest
 control-api at `/config/automation/manifest.json`) describing what
 workflows *could* run, and
 zero of them actually imported into n8n. `sudo ./pcctl install-workflows` is
-an explicit, optional step — Stage 1's [manual checkpoints](manual-checkpoints.md)
+an explicit, optional step — the platform's [manual checkpoints](manual-checkpoints.md)
 remain exactly five; this is not a sixth one, the same way `enable-repo-writes`
 never became a checkpoint either. Every imported workflow is inactive until an
 operator turns it on in the n8n UI.
@@ -177,10 +177,10 @@ with **no n8n workflow JSON yet** — `checkpoint-reminder` and
 `weekly-project-report`. Building them honestly needs a real per-project data
 source, and today a service token can reach exactly two things:
 `/api/system/status` and the automation surface itself — no existing route
-(`/api/projects`, Work Sessions, Resume) accepts a Bearer token, because P2 of
-this feature deliberately did not retrofit `resolvePrincipal` onto any
-existing route without a concrete consumer (see
-[service-accounts.md](service-accounts.md#why-the-40-pre-existing-routes-needed-no-change-at-all)).
+(`/api/projects`, Work Sessions, Resume) accepts a Bearer token, because this
+feature deliberately did not retrofit `resolvePrincipal` onto any existing
+route without a concrete consumer (see
+[service-accounts.md § Closed by default, per route](service-accounts.md#closed-by-default-per-route)).
 Wiring one of those routes for `project:read`/`report:write` is real,
 separate, reviewable work against an already-shipped surface — not something
 to rush into this change. `n8n-automation`'s registry entry already carries
@@ -279,7 +279,7 @@ being authenticated, same as any other read route.
 
 n8n publishes no webhook, no public REST API
 (`N8N_PUBLIC_API_DISABLED=true`, verified against the pinned image's own
-config schema since Stage 1), and — discovered while building this feature
+config schema since the foundation build), and — discovered while building this feature
 — community packages were enabled by default
 (`N8N_COMMUNITY_PACKAGES_ENABLED` had no explicit value), which would let
 anyone with n8n UI access install an arbitrary third-party node outside this

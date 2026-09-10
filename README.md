@@ -1,13 +1,17 @@
-# Project Memory & Development Control Center — Stage 1
+# Project Memory & Development Control Center
 
 A self-hosted control plane for project memory and development operations,
 reachable **only** over a Tailscale tailnet. Nothing in this deployment is
 published to the public internet.
 
-Stage 1 delivers the platform foundation: authentication, an immutable artifact
-store, a confined host runner, automation (n8n), encrypted off-site backups, and
-the verification tooling to prove all of it is actually configured the way this
-document claims. Project-management features arrive in later stages.
+The platform delivers the foundation — authentication, an immutable artifact
+store, a confined host runner, automation (n8n), encrypted off-site backups —
+plus the project-management features built on top of it: manual roadmap,
+project memory and checkpoints, an agent-run archive, a deterministic Resume
+briefing, read-only development (Git) state, controlled repository actions,
+and global search with an activity timeline. `./pcctl verify` and
+`./pcctl verify-security` prove all of it is actually configured the way this
+document claims.
 
 ---
 
@@ -153,17 +157,26 @@ upstream registry. No `latest`, no floating tag, no `^` or `~` in any manifest.
 | [project-registration.md](docs/project-registration.md) | Registering, inspecting, rescanning and archiving projects |
 | [manual-roadmap.md](docs/manual-roadmap.md) | Manual milestones, tasks, criteria, dependencies, notes and progress |
 | [project-memory.md](docs/project-memory.md) | Manual memory entries, supersede history, immutable checkpoints, "Where was I?" |
+| [agent-runs.md](docs/agent-runs.md) | Per-project archive of agent prompts/reports and human verification status |
+| [work-sessions-resume.md](docs/work-sessions-resume.md) | Work Session lifecycle and the deterministic Resume ("Where was I?") briefing |
+| [development-state.md](docs/development-state.md) | Read-only Git state (status, recent commits, tracking refs) surfaced to project continuity |
 | [repository-actions.md](docs/repository-actions.md) | Controlled, previewed repository commits: plan → confirm → execute → verify |
 | [service-accounts.md](docs/service-accounts.md) | Machine (Bearer token) identity for automation callers: scope, minting, closed-by-default routing |
 | [automation.md](docs/automation.md) | n8n workflow runs: manifest, claim/settle lifecycle, idempotency, notification policy |
+| [automation-acceptance.md](docs/automation-acceptance.md) | Live acceptance runbook run against production for the automation feature |
 | [installation.md](docs/installation.md) | Clean-machine install on Ubuntu 22.04 |
 | [manual-checkpoints.md](docs/manual-checkpoints.md) | The five steps that need a human |
 | [operations.md](docs/operations.md) | Daily operation, logs, secret rotation |
 | [backup-restore.md](docs/backup-restore.md) | Backup scope, schedule, restore procedure |
 | [update-rollback.md](docs/update-rollback.md) | Update flow, health gate, rollback |
-| [disaster-recovery.md](docs/disaster-recovery.md) | Rebuilding from nothing but a backup |
+| [disaster-recovery.md](docs/disaster-recovery.md) | Host failure, database failure, a bad deployment, a broken runner, a missing image, a failed backup |
 | [troubleshooting.md](docs/troubleshooting.md) | Symptom → diagnosis → fix |
-| [stage1-acceptance.md](docs/stage1-acceptance.md) | Acceptance criteria and how each is proven |
+| [search-timeline-acceptance.md](docs/search-timeline-acceptance.md) | Live acceptance runbook for global search, the activity timeline and client-side routing |
+| [stage1-acceptance.md](docs/stage1-acceptance.md) | Foundation acceptance criteria and how each is proven |
+| [project-map.md](docs/project-map.md) | Where each concern lives in the repository, and which areas are high-risk to change |
+| [quality-gates.md](docs/quality-gates.md) | Commands to run before calling any change complete |
+| [risk-registry.md](docs/risk-registry.md) | Known risks, their mitigations, and current status |
+| [test-scenarios.md](docs/test-scenarios.md) | Critical scenarios each feature's test suite must cover |
 
 ---
 

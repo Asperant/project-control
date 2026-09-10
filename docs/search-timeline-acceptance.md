@@ -127,13 +127,18 @@ sudo ./pcctl backup
 
 **Expected:** exits 0; a fresh restic snapshot exists.
 
-### 2.2 Update (applies migrations 0019-0021)
+### 2.2 Update (applies migrations 0019-0023)
+
+Migrations 0022 (expression indexes on `audit_events.detail`) and 0023
+(`timeline_events.request_id`) landed after this runbook was first written,
+during the same hardening pass — whatever is still pending on the host at
+run time, `pcctl update` applies in one shot.
 
 ```bash
 sudo ./pcctl update
 ```
 
-**Expected:** exits 0. `sudo ./pcctl status` shows `schema: 21 migration(s)
+**Expected:** exits 0. `sudo ./pcctl status` shows `schema: 23 migration(s)
 applied`. `control-api`, `caddy`, `web` all healthy.
 
 ### 2.3 Verify

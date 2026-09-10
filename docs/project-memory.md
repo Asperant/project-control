@@ -59,10 +59,12 @@ is recorded.
 
 The search box matches title and body, case-insensitively. The filter chips
 are `All`, each of the six types, `Pinned`, `Archived`, `Superseded` — the
-default view is active entries of every type. There is no embedding, vector
-search or full-text index; a plain indexed `ILIKE` is enough at this data
-volume, and the query is written so Postgres full-text search could be added
-later without changing the API shape.
+default view is active entries of every type. This in-screen filter is a
+plain indexed `ILIKE`, deliberately separate from the header's global search
+(`GET /api/search`, migration `0021`), which does use Postgres full-text
+search (a generated `tsvector` column and a GIN index) and searches across
+every project's memory at once rather than this one screen's list — see
+[architecture.md](architecture.md#search-and-timeline-domain).
 
 ## Checkpoints
 

@@ -154,12 +154,18 @@ it.
 
 ## Timeline
 
-Built from the same `audit_events` table every other timeline in this system
-uses (roadmap activity, project activity), filtered to this run's id and this
-feature's event types (`agentrun.*`, `agentprompt.*`, `agentreport.*`,
-`agentvalidation.*`). Raw audit rows are never sent to the browser — each is
-mapped to a short human label ("Prompt marked as sent", "Report finalized",
-"Validation set to accepted with changes", ...).
+Built from the same `audit_events` table every other per-entity activity
+history in this system uses (roadmap activity, project activity), filtered
+to this run's id and this feature's event types (`agentrun.*`,
+`agentprompt.*`, `agentreport.*`, `agentvalidation.*`). Raw audit rows are
+never sent to the browser — each is mapped to a short human label ("Prompt
+marked as sent", "Report finalized", "Validation set to accepted with
+changes", ...). This is a different, older feature from the project-wide
+**Timeline** tab and the `/timeline` global activity feed
+(`timeline_events`, not `audit_events` — see
+[architecture.md](architecture.md#search-and-timeline-domain)); a
+completed/failed Agent Run does also appear there, as its own curated,
+project-scoped entry.
 
 **Audit redaction:** no event ever carries a prompt body, report body, or
 validation note in its detail — only structured metadata (`agentRunId`,
@@ -185,7 +191,11 @@ revisions — an old report's wording can still lead you back to the run it
 belongs to), and validation note, case-insensitively. Filters: run status,
 agent name, validation status, and an archived toggle (archived runs are
 hidden by default). As with Memory, this is a plain indexed `ILIKE` — no
-embeddings, no vector search — appropriate at this data volume.
+embeddings, no vector search — appropriate at this data volume, and
+deliberately separate from the header's global search (`GET /api/search`,
+migration `0021`), which full-text-indexes run titles and prompt/report
+bodies across every project at once — see
+[architecture.md](architecture.md#search-and-timeline-domain).
 
 ## Checkpoint v2 and "Where was I?"
 

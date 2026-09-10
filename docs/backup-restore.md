@@ -80,8 +80,10 @@ sudo RESTIC_REPOSITORY=rclone:gdrive:Project-Control-Backups/restic \
 2. Starts a throwaway PostgreSQL container — unique name, own **internal**
    network, tmpfs data directory, no published port, no bind mount into live
    data.
-3. Loads both dumps and asserts the six Stage 1 tables and a non-empty migration
-   ledger are present.
+3. Loads both dumps and asserts an explicit list of `project_control` tables
+   (`restore-test.sh`'s `expected_tables` — every table through migration
+   `0018`; `timeline_events`, added by `0019`, is not yet in that list) and a
+   non-empty migration ledger are present.
 4. Re-hashes up to 50 restored artifacts and compares against their
    content-addressed filenames.
 5. Confirms the live containers were not disturbed and the sandbox never joined
