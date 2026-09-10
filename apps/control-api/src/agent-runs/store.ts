@@ -40,12 +40,15 @@ type AgentRunRow = {
   failed_at: Date | null; cancelled_at: Date | null;
   created_by: string | null; created_at: Date; updated_at: Date; archived_at: Date | null;
   has_prompt: boolean; current_report_version: number | null;
+  /** `created_at` at full microsecond precision, UTC — see memory/store.ts's MemoryRow.cursor_created_at for why the cursor can't be built from `created_at.toISOString()`. */
+  cursor_created_at: string;
 };
 
 const SELECT_RUN = `
   SELECT ar.*, rt.title related_task_title, rm.title related_milestone_title,
     EXISTS(SELECT 1 FROM agent_run_prompts p WHERE p.agent_run_id = ar.id) has_prompt,
-    (SELECT r.version FROM agent_reports r WHERE r.agent_run_id = ar.id AND r.status = 'final') current_report_version
+    (SELECT r.version FROM agent_reports r WHERE r.agent_run_id = ar.id AND r.status = 'final') current_report_version,
+    to_char(ar.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_created_at
   FROM agent_runs ar
   LEFT JOIN roadmap_tasks rt ON rt.id = ar.related_task_id
   LEFT JOIN roadmap_milestones rm ON rm.id = ar.related_milestone_id
@@ -155,7 +158,7 @@ export async function listAgentRuns(db: Executor, projectId: string, query: Agen
   return {
     agentRuns,
     pageSize: query.pageSize,
-    nextCursor: rows.length === query.pageSize && last ? { createdAt: last.created_at.toISOString(), id: last.id } : null,
+    nextCursor: rows.length === query.pageSize && last ? { createdAt: last.cursor_created_at, id: last.id } : null,
   };
 }
 

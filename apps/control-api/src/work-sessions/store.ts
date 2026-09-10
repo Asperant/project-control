@@ -17,6 +17,13 @@ type WorkSessionRow = {
   started_at: Date; ended_at: Date | null; outcome_summary: string | null;
   blockers: string | null; next_action: string | null; checkpoint_id: string | null;
   created_by: string | null; created_at: Date; updated_at: Date;
+  /**
+   * `started_at` at full microsecond precision, UTC — only present on rows
+   * read via the paginated `listWorkSessions` query below. See
+   * memory/store.ts's MemoryRow.cursor_created_at for why a keyset cursor
+   * can't be built from `started_at.toISOString()`.
+   */
+  cursor_started_at?: string;
 };
 
 type AmendmentRow = {
@@ -98,7 +105,8 @@ export async function listWorkSessions(
   // through `nextCursor`/`beforeStartedAt`+`beforeId`, never through `page`.
   const [sessionsResult, countResult] = await Promise.all([
     db.query<WorkSessionRow>(
-      `SELECT * FROM work_sessions
+      `SELECT *, to_char(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_started_at
+         FROM work_sessions
         WHERE project_id=$1
           AND ($2::text IS NULL OR status=$2)
           AND ($3::timestamptz IS NULL OR (started_at,id) < ($3::timestamptz,$4::uuid))
@@ -116,7 +124,7 @@ export async function listWorkSessions(
     workSessions: sessionsResult.rows.map((row) => mapSession(row, amendments.get(row.id) ?? [])),
     total: countResult.rows[0]?.total ?? 0,
     nextCursor: sessionsResult.rows.length === query.pageSize && last
-      ? { startedAt: last.started_at.toISOString(), id: last.id }
+      ? { startedAt: last.cursor_started_at!, id: last.id }
       : null,
   };
 }

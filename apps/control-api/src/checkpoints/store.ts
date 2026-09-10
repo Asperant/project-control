@@ -97,8 +97,12 @@ export async function createCheckpoint(
 
 export async function listCheckpoints(db: Executor, projectId: string, query: CheckpointListQuery): Promise<CheckpointListResponse> {
   await getProjectGuard(db, projectId);
-  const { rows } = await db.query<CheckpointRow>(
-    `SELECT id, project_id, snapshot_version, session_note, created_by, created_at, archived_at
+  // cursor_created_at: created_at at full microsecond precision, UTC — see
+  // memory/store.ts's MemoryRow.cursor_created_at for why the cursor can't
+  // be built from created_at.toISOString().
+  const { rows } = await db.query<CheckpointRow & { cursor_created_at: string }>(
+    `SELECT id, project_id, snapshot_version, session_note, created_by, created_at, archived_at,
+        to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_created_at
        FROM project_checkpoints
       WHERE project_id=$1 AND archived_at IS ${query.archived === 'true' ? 'NOT NULL' : 'NULL'}
         AND ($2::timestamptz IS NULL OR (created_at, id) < ($2::timestamptz, $3::uuid))
@@ -111,7 +115,7 @@ export async function listCheckpoints(db: Executor, projectId: string, query: Ch
   return {
     checkpoints,
     pageSize: query.pageSize,
-    nextCursor: rows.length === query.pageSize && last ? { createdAt: last.created_at.toISOString(), id: last.id } : null,
+    nextCursor: rows.length === query.pageSize && last ? { createdAt: last.cursor_created_at, id: last.id } : null,
   };
 }
 

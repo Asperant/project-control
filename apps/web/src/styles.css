@@ -430,7 +430,7 @@ button.primary {
 .field textarea { resize: vertical; }
 
 /* --- Tabs -------------------------------------------------------------- */
-.tab-nav { display: flex; gap: 0.35rem; }
+.tab-nav { display: flex; flex-wrap: wrap; gap: 0.35rem; }
 .tab-nav button,
 .tab-nav a {
   background: transparent;

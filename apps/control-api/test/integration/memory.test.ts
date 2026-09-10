@@ -197,6 +197,48 @@ describe.skipIf(!hasDocker)('manual project memory', () => {
     expect([...seen].filter((entryId) => pinnedIds.includes(entryId))).toHaveLength(2);
   });
 
+  it('does not drop rows that share a created_at down to the microsecond (a real bug: JS Date/toISOString() truncates to milliseconds, so a cursor built that way can equal — not exceed — an unreturned row with the same timestamp)', async () => {
+    const id = await project();
+    // Five rows sharing one literal timestamptz with non-zero microsecond
+    // digits beyond millisecond precision — exactly what a burst of writes
+    // inside one transaction produces in production (transaction-time `now()`
+    // is constant for the whole transaction), just forced deterministically
+    // here instead of relying on timing.
+    const sharedTimestamp = '2026-01-01T00:00:00.123456+00';
+    const ids: string[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      const entryId = randomUUID();
+      await harness.ctx.db.query(
+        `INSERT INTO project_memory_entries(id,project_id,type,title,body,importance,is_pinned,created_at)
+         VALUES ($1,$2,'context',$3,'Body','normal',false,$4::timestamptz)`,
+        [entryId, id, `Tied ${i}`, sharedTimestamp],
+      );
+      ids.push(entryId);
+    }
+
+    const seen = new Set<string>();
+    let cursor: { isPinned: boolean; createdAt: string; id: string } | null = null;
+    let pages = 0;
+    do {
+      const url = cursor
+        ? `/api/projects/${id}/memory?pageSize=2&beforeIsPinned=${cursor.isPinned}&beforeCreatedAt=${encodeURIComponent(cursor.createdAt)}&beforeId=${cursor.id}`
+        : `/api/projects/${id}/memory?pageSize=2`;
+      const response = await request('GET', url);
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      for (const e of body.entries) {
+        expect(seen.has(e.id)).toBe(false);
+        seen.add(e.id);
+      }
+      cursor = body.nextCursor;
+      pages += 1;
+      expect(pages).toBeLessThan(10);
+    } while (cursor);
+
+    expect(seen.size).toBe(5);
+    expect([...seen].sort()).toEqual([...ids].sort());
+  });
+
   it('importantOnly restricts to pinned or important/critical entries — the predicate getProjectResume relies on to stay bounded', async () => {
     const id = await project();
     const normal = await entry(id, { title: 'Normal', importance: 'normal' });

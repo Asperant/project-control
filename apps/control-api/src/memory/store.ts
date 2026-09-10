@@ -23,12 +23,25 @@ type MemoryRow = {
   supersedes_ids: string[] | null;
   source_agent_run_id: string | null; source_agent_run_title: string | null;
   archived_at: Date | null; created_by: string | null; created_at: Date; updated_at: Date;
+  /**
+   * `created_at` re-rendered in Postgres at full microsecond precision,
+   * forced to UTC. Only used to build a pagination cursor — never expose
+   * `created_at.toISOString()` there instead: node-pg's TIMESTAMPTZ parser
+   * (and JS `Date`) is millisecond-precision only, so two rows sharing a
+   * timestamp down to the microsecond (realistic within one transaction)
+   * would round to an identical millisecond string, and a page boundary
+   * landing between them would send back a cursor equal to — not less
+   * than — rows it hasn't returned yet, silently dropping them from the
+   * next page.
+   */
+  cursor_created_at: string;
 };
 
 const SELECT_ENTRY = `
   SELECT e.*, rt.title related_task_title, rm.title related_milestone_title, sb.title superseded_by_title,
     sar.title source_agent_run_title,
-    (SELECT array_agg(p.id ORDER BY p.created_at) FROM project_memory_entries p WHERE p.superseded_by_id = e.id) supersedes_ids
+    (SELECT array_agg(p.id ORDER BY p.created_at) FROM project_memory_entries p WHERE p.superseded_by_id = e.id) supersedes_ids,
+    to_char(e.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_created_at
   FROM project_memory_entries e
   LEFT JOIN roadmap_tasks rt ON rt.id = e.related_task_id
   LEFT JOIN roadmap_milestones rm ON rm.id = e.related_milestone_id
@@ -128,7 +141,7 @@ export async function listMemory(db: Executor, projectId: string, query: MemoryL
     entries,
     pageSize: query.pageSize,
     nextCursor: rows.length === query.pageSize && last
-      ? { isPinned: last.is_pinned, createdAt: last.created_at.toISOString(), id: last.id }
+      ? { isPinned: last.is_pinned, createdAt: last.cursor_created_at, id: last.id }
       : null,
   };
 }

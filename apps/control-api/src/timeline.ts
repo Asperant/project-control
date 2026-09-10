@@ -138,9 +138,27 @@ type TimelineRow = {
   event_type: string;
   summary: string;
   occurred_at: Date;
+  /**
+   * `occurred_at` re-rendered in Postgres itself at full microsecond
+   * precision, forced to UTC regardless of session timezone. Never derive
+   * a cursor from `occurred_at.toISOString()`: node-pg's TIMESTAMPTZ parser
+   * (and JS `Date` itself) is millisecond-precision only, so two rows that
+   * share a timestamp down to the microsecond — realistic within a single
+   * transaction, e.g. several timeline_events written together — would
+   * both round to the same millisecond string. A page boundary that lands
+   * between two such rows then sends back a cursor value *equal to* rows
+   * it hasn't returned yet, and `<` silently excludes them: pagination
+   * looks like it works until exactly this tie occurs, then a "Load more"
+   * click returns nothing. `SELECT_CURSOR_TIMESTAMP` is the fix, applied
+   * wherever this table's cursor is built.
+   */
+  cursor_occurred_at: string;
   actor_user_id: string | null;
   actor_kind: TimelineActorKind;
 };
+
+/** Full microsecond precision, forced to UTC — see TimelineRow.cursor_occurred_at. */
+const SELECT_CURSOR_TIMESTAMP = `to_char(occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_occurred_at`;
 
 function mapRow(row: TimelineRow): TimelineListResponse['entries'][number] {
   return {
@@ -162,7 +180,7 @@ function buildResponse(rows: TimelineRow[], pageSize: number): TimelineListRespo
   return {
     entries,
     pageSize,
-    nextCursor: rows.length === pageSize && last ? { occurredAt: last.occurred_at.toISOString(), id: last.id } : null,
+    nextCursor: rows.length === pageSize && last ? { occurredAt: last.cursor_occurred_at, id: last.id } : null,
   };
 }
 
@@ -170,7 +188,7 @@ function buildResponse(rows: TimelineRow[], pageSize: number): TimelineListRespo
 export async function listProjectTimeline(db: Executor, projectId: string, query: TimelineListQuery): Promise<TimelineListResponse> {
   await getProjectGuard(db, projectId);
   const { rows } = await db.query<TimelineRow>(
-    `SELECT * FROM timeline_events
+    `SELECT *, ${SELECT_CURSOR_TIMESTAMP} FROM timeline_events
       WHERE project_id = $1
         AND ($2::text IS NULL OR entity_type = $2)
         AND ($3::timestamptz IS NULL OR (occurred_at, id) < ($3::timestamptz, $4::bigint))
@@ -184,7 +202,7 @@ export async function listProjectTimeline(db: Executor, projectId: string, query
 /** Keyset-paginated, cross-project activity feed. */
 export async function listGlobalTimeline(db: Executor, query: TimelineListQuery): Promise<TimelineListResponse> {
   const { rows } = await db.query<TimelineRow>(
-    `SELECT * FROM timeline_events
+    `SELECT *, ${SELECT_CURSOR_TIMESTAMP} FROM timeline_events
       WHERE ($1::text IS NULL OR entity_type = $1)
         AND ($2::timestamptz IS NULL OR (occurred_at, id) < ($2::timestamptz, $3::bigint))
       ORDER BY occurred_at DESC, id DESC
