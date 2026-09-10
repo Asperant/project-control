@@ -139,6 +139,56 @@ sudo docker exec -i project-control-postgres env PGPASSWORD="$SUPER" \
 sudo docker exec -i project-control-postgres env PGPASSWORD="$SUPER" \
   pg_restore -U postgres -d n8n --no-owner --no-privileges < "$STAGING/n8n.dump"
 
+# pg_dump runs with --no-owner --no-privileges (see backup.sh), so the dump
+# carries no OWNER TO or GRANT statements at all, and pg_restore just ran as
+# the superuser — so every restored object is now owned by `postgres`, and
+# no application role (control_app, control_migrator, n8n_app, backup_reader)
+# has any privilege on any of it. `pcctl restart` does not re-run db-bootstrap
+# (that only runs on `pcctl start`/`install`), so without the two steps below
+# the restored stack comes back up permanently locked out of its own data:
+# control-api fails to start with "permission denied for table
+# schema_migrations". Confirmed by an isolated disaster-recovery drill.
+for db in project_control n8n; do
+  owner=control_migrator; [ "$db" = n8n ] && owner=n8n_app
+  sudo docker exec -i project-control-postgres env PGPASSWORD="$SUPER" \
+    psql -U postgres -d "${db}" -v ON_ERROR_STOP=1 <<SQL
+DO \$\$
+DECLARE r RECORD;
+BEGIN
+  FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
+    EXECUTE format('ALTER TABLE public.%I OWNER TO ${owner}', r.tablename);
+  END LOOP;
+  FOR r IN SELECT sequencename FROM pg_sequences WHERE schemaname = 'public' LOOP
+    EXECUTE format('ALTER SEQUENCE public.%I OWNER TO ${owner}', r.sequencename);
+  END LOOP;
+END \$\$;
+SQL
+done
+
+# Ownership fixes control_migrator's and n8n_app's own access (and, for n8n,
+# everything it needs itself, since n8n_app owns its whole schema). It does
+# NOT restore control_app's or backup_reader's table-level grants inside
+# project_control — those come only from the *_role_grants.sql migrations,
+# which pg_dump never captured either. Re-apply them; they are idempotent
+# GRANT/REVOKE statements, safe to run again on an already-migrated schema.
+for grants in 0002_role_grants 0004_projects_role_grants 0006_roadmap_role_grants \
+              0008_memory_role_grants 0010_agent_runs_role_grants 0012_work_sessions_role_grants \
+              0014_repository_actions_role_grants 0016_service_identity_role_grants \
+              0018_automation_role_grants 0020_timeline_events_role_grants; do
+  sudo docker exec -i project-control-postgres env PGPASSWORD="$SUPER" \
+    psql -U postgres -d project_control -v ON_ERROR_STOP=1 \
+    < "/srv/project-control/migrations/${grants}.sql"
+done
+
+# n8n's own *_role_grants equivalent is the ALTER DEFAULT PRIVILEGES clause in
+# reconcile-roles-and-databases.sh, but default privileges only apply to
+# objects created after that statement ran — never retroactively to tables
+# pg_restore just created. Grant backup_reader's read access explicitly.
+sudo docker exec -i project-control-postgres env PGPASSWORD="$SUPER" \
+  psql -U postgres -d n8n -c "
+    GRANT SELECT ON ALL TABLES IN SCHEMA public TO backup_reader;
+    GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO backup_reader;"
+
 sudo ./pcctl restart
 ```
 
@@ -207,6 +257,52 @@ for db in project_control; do   # or: for db in project_control n8n; do
   sudo docker exec -i project-control-postgres env PGPASSWORD="$SUPER" \
     pg_restore -U postgres -d "${db}" --no-owner --no-privileges \
     < "/tmp/pc-restore/srv/project-control/backups/staging/${db}.dump"
+
+  # pg_dump runs with --no-owner --no-privileges (see backup.sh), so the dump
+  # carries no OWNER TO or GRANT statements, and pg_restore just ran as the
+  # superuser — every object above is now owned by `postgres`, and no
+  # application role has any privilege on it. `pcctl restart` does not re-run
+  # db-bootstrap, so without this the restored database stays permanently
+  # locked out of its own data: control-api fails to start with "permission
+  # denied for table schema_migrations". Confirmed by an isolated
+  # disaster-recovery drill.
+  sudo docker exec -i project-control-postgres env PGPASSWORD="$SUPER" \
+    psql -U postgres -d "${db}" -v ON_ERROR_STOP=1 <<SQL
+DO \$\$
+DECLARE r RECORD;
+BEGIN
+  FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
+    EXECUTE format('ALTER TABLE public.%I OWNER TO ${owner}', r.tablename);
+  END LOOP;
+  FOR r IN SELECT sequencename FROM pg_sequences WHERE schemaname = 'public' LOOP
+    EXECUTE format('ALTER SEQUENCE public.%I OWNER TO ${owner}', r.sequencename);
+  END LOOP;
+END \$\$;
+SQL
+
+  if [ "$db" = project_control ]; then
+    # control_app's and backup_reader's table-level grants come only from the
+    # *_role_grants.sql migrations, which pg_dump never captured either.
+    # Idempotent GRANT/REVOKE statements — safe to replay on an
+    # already-migrated schema.
+    for grants in 0002_role_grants 0004_projects_role_grants 0006_roadmap_role_grants \
+                  0008_memory_role_grants 0010_agent_runs_role_grants 0012_work_sessions_role_grants \
+                  0014_repository_actions_role_grants 0016_service_identity_role_grants \
+                  0018_automation_role_grants 0020_timeline_events_role_grants; do
+      sudo docker exec -i project-control-postgres env PGPASSWORD="$SUPER" \
+        psql -U postgres -d project_control -v ON_ERROR_STOP=1 \
+        < "/srv/project-control/migrations/${grants}.sql"
+    done
+  else
+    # n8n's equivalent is the ALTER DEFAULT PRIVILEGES clause in
+    # reconcile-roles-and-databases.sh, but default privileges only apply to
+    # objects created after that statement ran — never retroactively to
+    # tables pg_restore just created.
+    sudo docker exec -i project-control-postgres env PGPASSWORD="$SUPER" \
+      psql -U postgres -d n8n -c "
+        GRANT SELECT ON ALL TABLES IN SCHEMA public TO backup_reader;
+        GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO backup_reader;"
+  fi
 done
 
 sudo ./pcctl restart
