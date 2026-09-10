@@ -264,6 +264,58 @@
 - Status: mitigated; the corrected predicate and its test coverage are a
   release gate for this feature.
 
+## Runner symlink resolution is not pinned across the request lifecycle
+
+- Category: security / runner.
+- Impact: `projectpath.Validate` resolves symlinks exactly once, via
+  `filepath.EvalSymlinks`, at project-registration/validation time, and every
+  downstream operation (`internal/detect`'s manifest scan, `internal/gitinfo`,
+  `internal/gitwrite`) is correctly called with that resolved `Canonical`
+  value rather than the raw input. But nothing pins that resolution via a
+  file descriptor obtained during validation (no `openat`/`O_NOFOLLOW`/
+  `openat2(RESOLVE_NO_SYMLINKS)`) — every later access re-resolves the path
+  string from scratch at the OS level (`os.ReadDir`, `os.Lstat`/`os.ReadFile`
+  by path, every `git -C dir ...` subprocess). An attacker who already holds
+  local filesystem write access to some component of the canonical path
+  (their own project directory, or any ancestor they can write to) could
+  swap that component for a symlink in the window between `Validate()`
+  returning and a later operation reading the same path string, and that
+  later operation would follow it. `docs/security-model.md` previously
+  described this as making a symlink escape "structurally impossible" for
+  the full request lifecycle; that claim held only for the single
+  resolution `Validate` performs, not for every operation after it, and has
+  been corrected (§11).
+- Separately discovered while investigating this: `WithinRoot`
+  (`internal/projectpath/projectpath.go:206`) implements the same
+  path-component containment check as a standalone function and is
+  unit-tested, but is not called from any production code path — not from
+  `internal/detect`'s directory walk (which the docs previously credited it
+  with governing), nor from anywhere else. The manifest scanner's actual
+  symlink defense is independent: `detect.go`'s `walk` uses lstat-derived
+  `DirEntry.IsDir()`/mode bits to skip every symlink entry without
+  following it, and `considerManifest` re-`Lstat`s a candidate file
+  immediately before reading it. That defense is real and closes the
+  scanner's own walk (see §11), but `WithinRoot` itself is dead code today.
+- Mitigation: requires an attacker to already have local filesystem write
+  access to a path component under the allowed root — this is a
+  defense-in-depth gap, not a remotely exploitable one; no HTTP request
+  alone can trigger it. `docs/security-model.md` §11 and §16 now state the
+  guarantee precisely instead of overclaiming it.
+- How to test: none today — closing this for real would mean pinning the
+  validated directory via an open file descriptor and switching every
+  downstream filesystem/`git` operation to a dirfd-relative form (e.g.
+  `openat2(RESOLVE_NO_SYMLINKS)` or an `*at()`-based walk), which is a
+  meaningfully larger change to `internal/detect`/`internal/gitinfo`/
+  `internal/gitwrite` than this pass's scope. `WithinRoot` should either be
+  wired into the scanner's walk (redundant with the lstat checks, but would
+  make the code match the doc's original intent) or removed as dead code —
+  neither was done in this pass, to avoid an unreviewed behavior change to
+  the runner outside a dedicated effort.
+- Status: **accepted, narrow — documentation corrected to match actual
+  guarantees; not remediated in code.** Revisit if a future feature grants
+  broader local write access to an untrusted actor, which would lower the
+  bar this gap currently requires.
+
 ## Runner startup race creates a partial deployment or rollback
 
 - Category: release / availability / state consistency.

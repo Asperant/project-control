@@ -1458,6 +1458,90 @@ pc_networks="$(docker network ls --format '{{.Name}}' 2>/dev/null | grep -c "^${
 record_check PASS COE-002 "This stack owns only its own networks" "${pc_networks} network(s) prefixed ${PC_COMPOSE_PROJECT}_"
 
 # =============================================================================
+# 10. Application-layer security checklist (static regression guards)
+# =============================================================================
+# Static, source-level checks — same style as the GIT-* secret scan above,
+# not a live probe. They exist to catch a *regression* away from a
+# guarantee this codebase was directly, manually verified to hold (see
+# docs/security-model.md §15): no raw-HTML injection sink in the web
+# frontend, no raw-HTML mode on the one markdown renderer, no unscoped
+# audit_events read, and no file write outside the digest-gated object
+# store. A FAIL here means the guarantee documented in §15 no longer holds
+# and that section needs re-verification, not just a code fix.
+log_step "Application-layer security checklist"
+
+if git -C "$PC_REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+  web_src="${PC_REPO_ROOT}/apps/web/src"
+  api_src="${PC_REPO_ROOT}/apps/control-api/src"
+
+  # APP-001: no raw-HTML injection sink anywhere in the web frontend.
+  if [[ -d "$web_src" ]]; then
+    sink_hits="$(grep -rlE 'dangerouslySetInnerHTML|\.innerHTML[[:space:]]*=|\.outerHTML[[:space:]]*=|document\.write\(' \
+      --include='*.ts' --include='*.tsx' "$web_src" 2>/dev/null || true)"
+    if [[ -z "$sink_hits" ]]; then
+      record_check PASS APP-001 "No raw-HTML injection sink in apps/web/src" ""
+    else
+      record_check FAIL APP-001 "Raw-HTML injection sink found" "${sink_hits//$'\n'/, }"
+    fi
+  else
+    record_check SKIP APP-001 "Raw-HTML injection sink scan" "apps/web/src not found"
+  fi
+
+  # APP-002: the one react-markdown usage renders no raw HTML (no rehype-raw).
+  if [[ -d "$web_src" ]]; then
+    md_sites="$(grep -rl "react-markdown" --include='*.ts' --include='*.tsx' "$web_src" 2>/dev/null || true)"
+    if [[ -z "$md_sites" ]]; then
+      record_check PASS APP-002 "react-markdown is not used" "nothing to check"
+    else
+      raw_html_plugin="$(printf '%s\n' "$md_sites" | xargs grep -lE 'rehype-raw|rehypeRaw' 2>/dev/null || true)"
+      if [[ -z "$raw_html_plugin" ]]; then
+        record_check PASS APP-002 "react-markdown usage renders no raw HTML" "$(printf '%s' "$md_sites" | tr '\n' ' ')"
+      else
+        record_check FAIL APP-002 "react-markdown usage enables raw HTML (rehype-raw)" "$raw_html_plugin"
+      fi
+    fi
+  else
+    record_check SKIP APP-002 "react-markdown raw-HTML check" "apps/web/src not found"
+  fi
+
+  # APP-003: no unscoped full-table read of audit_events (audit leakage guard).
+  if [[ -d "$api_src" ]]; then
+    unscoped="$(grep -rniE 'select[[:space:]]+\*[[:space:]]+from[[:space:]]+audit_events' \
+      --include='*.ts' "$api_src" 2>/dev/null || true)"
+    if [[ -n "$unscoped" ]]; then
+      record_check FAIL APP-003 "An unscoped SELECT * FROM audit_events exists" "${unscoped//$'\n'/, }"
+    else
+      unlimited="$(grep -rlE 'FROM audit_events' --include='*.ts' "$api_src" 2>/dev/null \
+        | xargs -r grep -LE 'LIMIT' 2>/dev/null || true)"
+      if [[ -z "$unlimited" ]]; then
+        record_check PASS APP-003 "Every audit_events read is scoped and bounded" ""
+      else
+        record_check FAIL APP-003 "An audit_events read has no LIMIT" "${unlimited//$'\n'/, }"
+      fi
+    fi
+  else
+    record_check SKIP APP-003 "audit_events read-scope check" "apps/control-api/src not found"
+  fi
+
+  # APP-004: no file write outside the digest-gated object store (unsafe-write guard).
+  if [[ -d "$api_src" ]]; then
+    write_hits="$(grep -rlE 'writeFile\(|writeFileSync\(|createWriteStream\(|fs\.mkdir\(' \
+      --include='*.ts' "$api_src" 2>/dev/null \
+      | grep -v '/storage/filesystem-store\.ts$' \
+      | grep -vE '\.test\.ts$' || true)"
+    if [[ -z "$write_hits" ]]; then
+      record_check PASS APP-004 "No file write outside storage/filesystem-store.ts" ""
+    else
+      record_check FAIL APP-004 "Unexpected file write outside the digest-gated store" "${write_hits//$'\n'/, }"
+    fi
+  else
+    record_check SKIP APP-004 "Unsafe file write scan" "apps/control-api/src not found"
+  fi
+else
+  record_check SKIP APP-001 "Application-layer security checklist" "not a git repository"
+fi
+
+# =============================================================================
 # Output
 # =============================================================================
 if (( JSON )); then
