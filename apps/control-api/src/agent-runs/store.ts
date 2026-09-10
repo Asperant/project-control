@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type {
-  AgentRun, AgentRunListQuery, AgentRunStatus, AgentRunTimelineEntry, AgentRunPrompt,
+  AgentRun, AgentRunListQuery, AgentRunListResponse, AgentRunStatus, AgentRunTimelineEntry, AgentRunPrompt,
   AgentReport, AgentValidationStatus, CreateAgentRunRequest, CreateMemoryEntryRequest, MemoryEntry,
   UpdateAgentRunRequest, UpdateAgentRunValidationRequest,
 } from '@project-control/contracts';
@@ -110,7 +110,7 @@ async function assertConsistentRelations(
 // Agent Run CRUD / lifecycle
 // ---------------------------------------------------------------------------
 
-export async function listAgentRuns(db: Executor, projectId: string, query: AgentRunListQuery): Promise<AgentRun[]> {
+export async function listAgentRuns(db: Executor, projectId: string, query: AgentRunListQuery): Promise<AgentRunListResponse> {
   await getProjectGuard(db, projectId);
   const conditions = ['ar.project_id = $1'];
   const params: unknown[] = [projectId];
@@ -137,12 +137,26 @@ export async function listAgentRuns(db: Executor, projectId: string, query: Agen
       OR EXISTS (SELECT 1 FROM agent_reports rp WHERE rp.agent_run_id = ar.id AND rp.body ILIKE ${p})
     )`);
   }
+  // Keyset cursor, appended after every filter above (including the search
+  // EXISTS subqueries) — it is just one more WHERE predicate, so it composes
+  // with any combination of filters without special-casing.
+  if (query.beforeCreatedAt !== undefined) {
+    params.push(query.beforeCreatedAt, query.beforeId);
+    conditions.push(`(ar.created_at, ar.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`);
+  }
 
+  params.push(query.pageSize);
   const { rows } = await db.query<AgentRunRow>(
-    `${SELECT_RUN} WHERE ${conditions.join(' AND ')} ORDER BY ar.created_at DESC`,
+    `${SELECT_RUN} WHERE ${conditions.join(' AND ')} ORDER BY ar.created_at DESC, ar.id DESC LIMIT $${params.length}`,
     params,
   );
-  return rows.map(mapRun);
+  const agentRuns = rows.map(mapRun);
+  const last = rows.at(-1);
+  return {
+    agentRuns,
+    pageSize: query.pageSize,
+    nextCursor: rows.length === query.pageSize && last ? { createdAt: last.created_at.toISOString(), id: last.id } : null,
+  };
 }
 
 export async function getAgentRun(db: Executor, projectId: string, runId: string): Promise<AgentRun> {

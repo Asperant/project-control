@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import type { CheckpointDetail, CheckpointGitState, CheckpointSnapshot, CheckpointSummary } from '@project-control/contracts';
+import type {
+  CheckpointDetail, CheckpointGitState, CheckpointListQuery, CheckpointListResponse, CheckpointSnapshot, CheckpointSummary,
+} from '@project-control/contracts';
 import type { Db, DbClient } from '../db/pool.js';
 import { withTransaction } from '../db/pool.js';
 import { notFound } from '../errors.js';
@@ -93,15 +95,24 @@ export async function createCheckpoint(
   });
 }
 
-export async function listCheckpoints(db: Executor, projectId: string, includeArchived: boolean): Promise<CheckpointSummary[]> {
+export async function listCheckpoints(db: Executor, projectId: string, query: CheckpointListQuery): Promise<CheckpointListResponse> {
   await getProjectGuard(db, projectId);
   const { rows } = await db.query<CheckpointRow>(
     `SELECT id, project_id, snapshot_version, session_note, created_by, created_at, archived_at
-       FROM project_checkpoints WHERE project_id=$1 AND archived_at IS ${includeArchived ? 'NOT NULL' : 'NULL'}
-       ORDER BY created_at DESC`,
-    [projectId],
+       FROM project_checkpoints
+      WHERE project_id=$1 AND archived_at IS ${query.archived === 'true' ? 'NOT NULL' : 'NULL'}
+        AND ($2::timestamptz IS NULL OR (created_at, id) < ($2::timestamptz, $3::uuid))
+      ORDER BY created_at DESC, id DESC
+      LIMIT $4`,
+    [projectId, query.beforeCreatedAt ?? null, query.beforeId ?? null, query.pageSize],
   );
-  return rows.map(mapSummary);
+  const checkpoints = rows.map(mapSummary);
+  const last = rows.at(-1);
+  return {
+    checkpoints,
+    pageSize: query.pageSize,
+    nextCursor: rows.length === query.pageSize && last ? { createdAt: last.created_at.toISOString(), id: last.id } : null,
+  };
 }
 
 export async function getCheckpoint(db: Executor, projectId: string, checkpointId: string): Promise<CheckpointDetail> {

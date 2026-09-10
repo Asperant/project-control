@@ -13,6 +13,15 @@ import {
 import type { RunnerClient } from '../runner/client.js';
 import { getProjectDevelopment } from '../development/service.js';
 
+// getProjectResume only ever surfaces memory entries that are pinned or
+// importance in (important, critical) — see compareImportantMemory below —
+// so loading *every* active entry (5 joins each) on every Resume load was
+// pure waste: importantOnly pushes exactly that predicate into SQL, and this
+// cap is a belt-and-suspenders bound on top of it (a project with more than
+// this many pinned/important/critical entries at once is not a case this
+// screen needs to show in full; the newest/most-pinned ones win).
+const IMPORTANT_MEMORY_LIMIT = 200;
+
 type CandidateRow = {
   id: string;
   milestone_id: string;
@@ -104,14 +113,14 @@ function workItem(task: {
 export async function getProjectResume(
   db: Executor, runner: RunnerClient, projectId: string, requestId?: string,
 ): Promise<ResumeProjectResponse> {
-  const [project, context, candidates, activeWorkSession, lastSession, history, allMemory, agentAttention, development] = await Promise.all([
+  const [project, context, candidates, activeWorkSession, lastSession, history, importantMemory, agentAttention, development] = await Promise.all([
     getProjectGuard(db, projectId),
     getProjectContext(db, projectId),
     loadResumeCandidates(db, projectId),
     getOpenWorkSession(db, projectId),
     getLastClosedWorkSession(db, projectId),
     listWorkSessions(db, projectId, { page: 1, pageSize: 20, status: 'closed' }),
-    listMemory(db, projectId, {}),
+    listMemory(db, projectId, { importantOnly: 'true', pageSize: IMPORTANT_MEMORY_LIMIT }),
     loadAgentAttention(db, projectId),
     getProjectDevelopment(db, runner, projectId, requestId),
   ]);
@@ -166,9 +175,9 @@ export async function getProjectResume(
       blocked: visibleBlockedTasks.map(workItem),
     },
     recentAgentWork: context.recentAgentWork,
-    importantMemory: allMemory
-      .filter((entry) => entry.isPinned || entry.importance === 'critical' || entry.importance === 'important')
-      .sort(compareImportantMemory),
+    // Already filtered to pinned/important/critical in SQL (importantOnly
+    // above); only the display ordering happens in JS.
+    importantMemory: importantMemory.entries.sort(compareImportantMemory),
     workSessionHistory: {
       workSessions: history.workSessions,
       page: 1,

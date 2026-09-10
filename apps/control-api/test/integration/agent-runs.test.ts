@@ -523,6 +523,53 @@ describe.skipIf(!hasDocker)('Agent Run provenance archive', () => {
     });
   });
 
+  describe('pagination', () => {
+    it('paginates with a keyset cursor that never repeats or skips a run', async () => {
+      const id = await project();
+      for (let i = 0; i < 5; i += 1) await run(id, { title: `Run ${i}` });
+
+      const seen = new Set<string>();
+      let cursor: { createdAt: string; id: string } | null = null;
+      let pages = 0;
+      do {
+        const url = cursor
+          ? `/api/projects/${id}/agent-runs?pageSize=2&beforeCreatedAt=${encodeURIComponent(cursor.createdAt)}&beforeId=${cursor.id}`
+          : `/api/projects/${id}/agent-runs?pageSize=2`;
+        const response = await request('GET', url);
+        expect(response.statusCode).toBe(200);
+        const body = response.json();
+        for (const r of body.agentRuns) {
+          expect(seen.has(r.id)).toBe(false);
+          seen.add(r.id);
+        }
+        cursor = body.nextCursor;
+        pages += 1;
+        expect(pages).toBeLessThan(10);
+      } while (cursor);
+
+      expect(seen.size).toBe(5);
+    });
+
+    it('keeps the cursor working alongside the search filter', async () => {
+      const id = await project();
+      for (let i = 0; i < 4; i += 1) await run(id, { title: `Zephyr run ${i}` });
+      await run(id, { title: 'Unrelated' });
+
+      const firstPage = (await request('GET', `/api/projects/${id}/agent-runs?search=Zephyr&pageSize=2`)).json();
+      expect(firstPage.agentRuns).toHaveLength(2);
+      expect(firstPage.nextCursor).not.toBeNull();
+      const cursor = firstPage.nextCursor as { createdAt: string; id: string };
+      const secondPage = (await request(
+        'GET',
+        `/api/projects/${id}/agent-runs?search=Zephyr&pageSize=2&beforeCreatedAt=${encodeURIComponent(cursor.createdAt)}&beforeId=${cursor.id}`,
+      )).json();
+      expect(secondPage.agentRuns).toHaveLength(2);
+      const allIds = [...firstPage.agentRuns, ...secondPage.agentRuns].map((r: any) => r.id);
+      expect(new Set(allIds).size).toBe(4);
+      expect(allIds.every((rid: string) => rid !== undefined)).toBe(true);
+    });
+  });
+
   describe('timeline', () => {
     it('reflects lifecycle events scoped to this run only', async () => {
       const id = await project();

@@ -145,7 +145,14 @@ describe.skipIf(!hasDocker)('deterministic Resume Project briefing', () => {
     expect(briefing.workSessionHistory.workSessions).toHaveLength(20);
     expect(briefing.workSessionHistory.total).toBe(21);
 
-    const secondPage = (await request('GET', `/api/projects/${id}/work-sessions?page=2&pageSize=20`)).json();
+    // Work Session history pagination is pure keyset — see work-sessions.test.ts.
+    // Reaching the 21st (oldest) session goes through nextCursor, not `page`.
+    const cursor = briefing.workSessionHistory.nextCursor as { startedAt: string; id: string };
+    expect(cursor).not.toBeNull();
+    const secondPage = (await request(
+      'GET',
+      `/api/projects/${id}/work-sessions?pageSize=20&status=closed&beforeStartedAt=${encodeURIComponent(cursor.startedAt)}&beforeId=${cursor.id}`,
+    )).json();
     expect(secondPage.workSessions).toHaveLength(1);
   });
 

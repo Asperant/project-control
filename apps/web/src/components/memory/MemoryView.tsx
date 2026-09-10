@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type {
   CheckpointDetail, CheckpointSummary, CreateMemoryEntryRequest, MemoryEntry, MemoryImportance,
-  MemoryType, ProjectContextResponse, RoadmapMilestone,
+  MemoryListQuery, MemoryType, ProjectContextResponse, RoadmapMilestone,
 } from '@project-control/contracts';
 import { ApiError, api } from '../../api-client';
 
@@ -47,12 +47,12 @@ export function MemoryView({
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
-      const query: Record<string, string> = {};
-      if (filter === 'pinned') query['pinned'] = 'true';
-      else if (filter === 'archived') query['archived'] = 'true';
-      else if (filter === 'superseded') query['superseded'] = 'true';
-      else if (filter !== 'all') query['type'] = filter;
-      if (search.trim()) query['search'] = search.trim();
+      const query: Partial<MemoryListQuery> = {};
+      if (filter === 'pinned') query.pinned = 'true';
+      else if (filter === 'archived') query.archived = 'true';
+      else if (filter === 'superseded') query.superseded = 'true';
+      else if (filter !== 'all') query.type = filter;
+      if (search.trim()) query.search = search.trim();
 
       const [contextResponse, entriesResponse, checkpointsResponse, roadmap] = await Promise.all([
         api.getProjectContext(projectId, signal),

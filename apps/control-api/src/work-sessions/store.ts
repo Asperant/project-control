@@ -89,15 +89,21 @@ export async function listWorkSessions(
   db: Executor, projectId: string, query: WorkSessionListQuery,
 ): Promise<{ workSessions: WorkSession[]; total: number; nextCursor: { startedAt: string; id: string } | null }> {
   await getProjectGuard(db, projectId);
-  const offset = query.beforeStartedAt ? 0 : (query.page - 1) * query.pageSize;
+  // Pure keyset pagination — no OFFSET. `query.page` is accepted and echoed
+  // back by the route for display only; it never affects which rows come
+  // back. Mixing an OFFSET computed from `page` with the `beforeStartedAt`
+  // cursor used to produce undefined/duplicated results under concurrent
+  // inserts (OFFSET-based paging shifts under you; keyset doesn't — see
+  // work-sessions.test.ts). Advancing past the first page always goes
+  // through `nextCursor`/`beforeStartedAt`+`beforeId`, never through `page`.
   const [sessionsResult, countResult] = await Promise.all([
     db.query<WorkSessionRow>(
       `SELECT * FROM work_sessions
         WHERE project_id=$1
           AND ($2::text IS NULL OR status=$2)
           AND ($3::timestamptz IS NULL OR (started_at,id) < ($3::timestamptz,$4::uuid))
-        ORDER BY started_at DESC, id DESC LIMIT $5 OFFSET $6`,
-      [projectId, query.status ?? null, query.beforeStartedAt ?? null, query.beforeId ?? null, query.pageSize, offset],
+        ORDER BY started_at DESC, id DESC LIMIT $5`,
+      [projectId, query.status ?? null, query.beforeStartedAt ?? null, query.beforeId ?? null, query.pageSize],
     ),
     db.query<{ total: number }>(
       'SELECT count(*)::int total FROM work_sessions WHERE project_id=$1 AND ($2::text IS NULL OR status=$2)',

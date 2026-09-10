@@ -272,18 +272,37 @@ describe.skipIf(!hasDocker)('Work Sessions', () => {
     ).rejects.toMatchObject({ code: '23503' });
   });
 
-  it('paginates newest-first history without silently losing older sessions', async () => {
+  it('paginates newest-first history purely by keyset cursor — `page` is echoed back for display only and never used to compute an offset', async () => {
     const projectId = await project();
     for (let index = 0; index < 3; index += 1) {
       const session = await start(projectId, `Goal ${index}`);
       await request('POST', `/api/projects/${projectId}/work-sessions/${session.id}/close`, { outcomeSummary: `Outcome ${index}` });
     }
     const firstPage = (await request('GET', `/api/projects/${projectId}/work-sessions?page=1&pageSize=2`)).json();
-    const secondPage = (await request('GET', `/api/projects/${projectId}/work-sessions?page=2&pageSize=2`)).json();
     expect(firstPage.total).toBe(3);
     expect(firstPage.workSessions).toHaveLength(2);
-    expect(secondPage.workSessions).toHaveLength(1);
     expect(firstPage.workSessions[0].goal).toBe('Goal 2');
+    expect(firstPage.nextCursor).not.toBeNull();
+
+    // Requesting page=2 without a cursor is no longer a real second page: the
+    // removed OFFSET is what silently produced undefined/duplicated results
+    // when a client mixed `page` with `beforeStartedAt` navigation (OFFSET
+    // shifts under concurrent inserts; keyset doesn't). `page` is still
+    // accepted and echoed back for display, but the query itself always
+    // starts from the top unless a real cursor is supplied.
+    const page2WithoutCursor = (await request('GET', `/api/projects/${projectId}/work-sessions?page=2&pageSize=2`)).json();
+    expect(page2WithoutCursor.page).toBe(2);
+    expect(page2WithoutCursor.workSessions.map((session: { id: string }) => session.id))
+      .toEqual(firstPage.workSessions.map((session: { id: string }) => session.id));
+
+    // The only supported way to actually reach the next page is the cursor.
+    const cursor = firstPage.nextCursor as { startedAt: string; id: string };
+    const nextPage = (await request(
+      'GET',
+      `/api/projects/${projectId}/work-sessions?pageSize=2&beforeStartedAt=${encodeURIComponent(cursor.startedAt)}&beforeId=${cursor.id}`,
+    )).json();
+    expect(nextPage.workSessions).toHaveLength(1);
+    expect(nextPage.workSessions[0].goal).toBe('Goal 0');
   });
 
   it('keeps cursor pagination stable when a newer session is inserted between reads', async () => {

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type {
-  CreateMemoryEntryRequest, MemoryEntry, MemoryImportance, MemoryListQuery, MemoryType,
+  CreateMemoryEntryRequest, MemoryEntry, MemoryImportance, MemoryListQuery, MemoryListResponse, MemoryType,
   SupersedeMemoryEntryRequest, UpdateMemoryEntryRequest,
 } from '@project-control/contracts';
 import type { Db, DbClient } from '../db/pool.js';
@@ -79,7 +79,7 @@ async function assertMilestoneInProject(db: Executor, projectId: string, milesto
   if (!rows[0]) throw notFound('Related milestone not found in this project.');
 }
 
-export async function listMemory(db: Executor, projectId: string, query: MemoryListQuery): Promise<MemoryEntry[]> {
+export async function listMemory(db: Executor, projectId: string, query: MemoryListQuery): Promise<MemoryListResponse> {
   await getProjectGuard(db, projectId);
   const conditions = ['e.project_id = $1'];
   const params: unknown[] = [projectId];
@@ -104,12 +104,33 @@ export async function listMemory(db: Executor, projectId: string, query: MemoryL
     params.push(`%${query.search}%`);
     conditions.push(`(e.title ILIKE $${params.length} OR e.body ILIKE $${params.length})`);
   }
+  if (query.importantOnly === 'true') {
+    conditions.push(`(e.is_pinned OR e.importance IN ('important','critical'))`);
+  }
 
+  // Keyset cursor over (is_pinned, created_at, id) — is_pinned is the
+  // *primary* sort key below, not created_at alone, so the cursor has to
+  // carry all three columns the ORDER BY actually uses or a page boundary
+  // that falls between two differently-pinned rows would skip or repeat one.
+  if (query.beforeCreatedAt !== undefined) {
+    params.push(query.beforeIsPinned === 'true', query.beforeCreatedAt, query.beforeId);
+    conditions.push(`(e.is_pinned, e.created_at, e.id) < ($${params.length - 2}::boolean, $${params.length - 1}::timestamptz, $${params.length}::uuid)`);
+  }
+
+  params.push(query.pageSize);
   const { rows } = await db.query<MemoryRow>(
-    `${SELECT_ENTRY} WHERE ${conditions.join(' AND ')} ORDER BY e.is_pinned DESC, e.created_at DESC`,
+    `${SELECT_ENTRY} WHERE ${conditions.join(' AND ')} ORDER BY e.is_pinned DESC, e.created_at DESC, e.id DESC LIMIT $${params.length}`,
     params,
   );
-  return rows.map(mapEntry);
+  const entries = rows.map(mapEntry);
+  const last = rows.at(-1);
+  return {
+    entries,
+    pageSize: query.pageSize,
+    nextCursor: rows.length === query.pageSize && last
+      ? { isPinned: last.is_pinned, createdAt: last.created_at.toISOString(), id: last.id }
+      : null,
+  };
 }
 
 export async function getMemoryEntry(db: Executor, projectId: string, entryId: string): Promise<MemoryEntry> {
