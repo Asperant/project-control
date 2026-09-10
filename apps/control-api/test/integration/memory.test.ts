@@ -157,6 +157,60 @@ describe.skipIf(!hasDocker)('manual project memory', () => {
     expect((await request('GET', `/api/projects/${id}/memory?superseded=true`)).json().entries).toHaveLength(0);
   });
 
+  it('paginates with a compound keyset cursor over (is_pinned, created_at, id) that never repeats or skips a row', async () => {
+    const id = await project();
+    const pinnedIds: string[] = [];
+    for (let i = 0; i < 2; i += 1) {
+      const e = await entry(id, { title: `Pinned ${i}` });
+      await request('POST', `/api/projects/${id}/memory/${e.id}/pin`);
+      pinnedIds.push(e.id);
+    }
+    for (let i = 0; i < 5; i += 1) await entry(id, { title: `Unpinned ${i}` });
+
+    const seen = new Set<string>();
+    let cursor: { isPinned: boolean; createdAt: string; id: string } | null = null;
+    let pages = 0;
+    do {
+      const url = cursor
+        ? `/api/projects/${id}/memory?pageSize=3&beforeIsPinned=${cursor.isPinned}&beforeCreatedAt=${encodeURIComponent(cursor.createdAt)}&beforeId=${cursor.id}`
+        : `/api/projects/${id}/memory?pageSize=3`;
+      const response = await request('GET', url);
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      // is_pinned is the primary sort key: the very first page must exhaust
+      // both pinned rows before any unpinned one appears.
+      if (pages === 0) {
+        expect(body.entries[0].isPinned).toBe(true);
+        expect(body.entries[1].isPinned).toBe(true);
+        expect(body.entries[2].isPinned).toBe(false);
+      }
+      for (const e of body.entries) {
+        expect(seen.has(e.id)).toBe(false);
+        seen.add(e.id);
+      }
+      cursor = body.nextCursor;
+      pages += 1;
+      expect(pages).toBeLessThan(10);
+    } while (cursor);
+
+    expect(seen.size).toBe(7);
+    expect([...seen].filter((entryId) => pinnedIds.includes(entryId))).toHaveLength(2);
+  });
+
+  it('importantOnly restricts to pinned or important/critical entries — the predicate getProjectResume relies on to stay bounded', async () => {
+    const id = await project();
+    const normal = await entry(id, { title: 'Normal', importance: 'normal' });
+    const important = await entry(id, { title: 'Important', importance: 'important' });
+    const critical = await entry(id, { title: 'Critical', importance: 'critical' });
+    const pinnedNormal = await entry(id, { title: 'Pinned normal', importance: 'normal' });
+    await request('POST', `/api/projects/${id}/memory/${pinnedNormal.id}/pin`);
+    void normal;
+
+    const found = (await request('GET', `/api/projects/${id}/memory?importantOnly=true`)).json().entries;
+    const foundIds = found.map((e: any) => e.id).sort();
+    expect(foundIds).toEqual([important.id, critical.id, pinnedNormal.id].sort());
+  });
+
   describe('supersede', () => {
     it('creates a new entry and preserves the old one as superseded, with a visible link both ways', async () => {
       const id = await project();

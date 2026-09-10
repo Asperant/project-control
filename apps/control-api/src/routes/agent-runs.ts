@@ -63,7 +63,7 @@ export const agentRunsRoutes = (ctx: AppContext): FastifyPluginAsync => async (a
   app.get('/api/projects/:projectId/agent-runs', { preHandler: requireAuth }, async (request, reply) => {
     const { projectId } = ids(request);
     const query = parse(agentRunListQuerySchema, request.query);
-    return reply.send({ agentRuns: await listAgentRuns(ctx.db, projectId!, query) });
+    return reply.send(await listAgentRuns(ctx.db, projectId!, query));
   });
   app.get('/api/projects/:projectId/agent-runs/:runId', { preHandler: requireAuth }, async (request, reply) => {
     const { projectId, runId } = ids(request);

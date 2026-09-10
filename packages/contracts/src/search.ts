@@ -24,6 +24,11 @@ export const searchQuerySchema = z.object({
   q: z.string().trim().min(1).max(200),
   type: searchEntityTypeSchema.optional(),
   projectId: uuidSchema.optional(),
+  // No `before*` cursor / nextCursor here, unlike timeline.ts and the other
+  // list endpoints: this is a ranked UNION across several tables, and
+  // relevance drops off sharply past the first screen, so a real pagination
+  // continuation would be low-value complexity for a feature nobody scrolls
+  // deep into. A hard cap is the right shape for this one.
   limit: z.coerce.number().int().min(1).max(50).optional().default(20),
 }).strict();
 export type SearchQuery = z.infer<typeof searchQuerySchema>;

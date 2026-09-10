@@ -14,6 +14,11 @@ import { loadRecentAgentActivity } from '../agent-runs/snapshot.js';
  * docs/project-memory.md for the ordering policy this relies on.
  */
 
+// Pinning is a deliberate, curated act, so this is generous relative to
+// listMemory's own default page size — a project would need an unusually
+// large amount of pinned material to ever hit it.
+const PINNED_CONTEXT_LIMIT = 200;
+
 type ChangeCategory = { prefix: string; label: (count: number) => string };
 
 const CHANGE_CATEGORIES: Record<string, ChangeCategory> = {
@@ -100,12 +105,13 @@ async function computeChangesSinceCheckpoint(
 
 export async function getProjectContext(db: Executor, projectId: string): Promise<ProjectContextResponse> {
   await getProjectGuard(db, projectId);
-  const [raw, pinnedContext, lastCheckpoint, recentAgentWork] = await Promise.all([
+  const [raw, pinnedMemory, lastCheckpoint, recentAgentWork] = await Promise.all([
     loadRawProjectData(db, projectId),
-    listMemory(db, projectId, { pinned: 'true' }),
+    listMemory(db, projectId, { pinned: 'true', pageSize: PINNED_CONTEXT_LIMIT }),
     getLastActiveCheckpoint(db, projectId),
     loadRecentAgentActivity(db, projectId, RECENT_AGENT_ACTIVITY_LIMIT),
   ]);
+  const pinnedContext = pinnedMemory.entries;
   const changesSinceCheckpoint = await computeChangesSinceCheckpoint(db, projectId, lastCheckpoint);
 
   return {

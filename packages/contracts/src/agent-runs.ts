@@ -58,7 +58,11 @@ export const agentRunSchema = z.object({
 });
 export type AgentRun = z.infer<typeof agentRunSchema>;
 
-export const agentRunListResponseSchema = z.object({ agentRuns: z.array(agentRunSchema) });
+export const agentRunListResponseSchema = z.object({
+  agentRuns: z.array(agentRunSchema),
+  pageSize: z.number().int().positive().optional().default(50),
+  nextCursor: z.object({ createdAt: timestamp, id: uuid }).nullable().default(null),
+});
 export const agentRunResponseSchema = z.object({ agentRun: agentRunSchema });
 export type AgentRunListResponse = z.infer<typeof agentRunListResponseSchema>;
 export type AgentRunResponse = z.infer<typeof agentRunResponseSchema>;
@@ -85,7 +89,14 @@ export const agentRunListQuerySchema = z.object({
   agentName: z.string().trim().max(80).optional(),
   validationStatus: agentValidationStatusSchema.optional(),
   archived: z.literal('true').optional(),
-}).strict();
+  pageSize: z.coerce.number().int().min(1).max(100).optional().default(50),
+  beforeCreatedAt: timestamp.optional(),
+  beforeId: uuid.optional(),
+}).strict().superRefine((value, ctx) => {
+  if ((value.beforeCreatedAt === undefined) !== (value.beforeId === undefined)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['beforeCreatedAt'], message: 'beforeCreatedAt and beforeId must be supplied together.' });
+  }
+});
 export type AgentRunListQuery = z.infer<typeof agentRunListQuerySchema>;
 
 // ---------------------------------------------------------------------------

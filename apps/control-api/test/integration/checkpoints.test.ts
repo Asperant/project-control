@@ -199,6 +199,32 @@ describe.skipIf(!hasDocker)('immutable checkpoints', () => {
     expect(list.map((c: any) => c.id)).toEqual([first.id]);
   });
 
+  it('paginates with a keyset cursor that never repeats or skips a checkpoint', async () => {
+    const id = await project();
+    for (let i = 0; i < 5; i += 1) await request('POST', `/api/projects/${id}/checkpoints`, { sessionNote: `Checkpoint ${i}` });
+
+    const seen = new Set<string>();
+    let cursor: { createdAt: string; id: string } | null = null;
+    let pages = 0;
+    do {
+      const url = cursor
+        ? `/api/projects/${id}/checkpoints?pageSize=2&beforeCreatedAt=${encodeURIComponent(cursor.createdAt)}&beforeId=${cursor.id}`
+        : `/api/projects/${id}/checkpoints?pageSize=2`;
+      const response = await request('GET', url);
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      for (const c of body.checkpoints) {
+        expect(seen.has(c.id)).toBe(false);
+        seen.add(c.id);
+      }
+      cursor = body.nextCursor;
+      pages += 1;
+      expect(pages).toBeLessThan(10);
+    } while (cursor);
+
+    expect(seen.size).toBe(5);
+  });
+
   it('is immutable at the database privilege level: control_app cannot rewrite a checkpoint and cannot delete one', async () => {
     const id = await project();
     const checkpoint = (await request('POST', `/api/projects/${id}/checkpoints`, { sessionNote: 'original' })).json().checkpoint;

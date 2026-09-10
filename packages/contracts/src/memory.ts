@@ -49,7 +49,21 @@ export const memoryEntrySchema = z.object({
 });
 export type MemoryEntry = z.infer<typeof memoryEntrySchema>;
 
-export const memoryListResponseSchema = z.object({ entries: z.array(memoryEntrySchema) });
+/**
+ * Keyset-paginated, matching timeline.ts's established shape. `is_pinned` is
+ * the *primary* sort key on this list (pinned entries always float to the
+ * top), not `created_at` alone, so the cursor has to encode all three
+ * columns the ORDER BY actually uses — see listMemory (memory/store.ts).
+ *
+ * `pageSize`/`nextCursor` default when absent so a caller that only reads
+ * `entries` (e.g. the related-memory-by-agent-run response, which reuses
+ * this schema unpaginated) still parses.
+ */
+export const memoryListResponseSchema = z.object({
+  entries: z.array(memoryEntrySchema),
+  pageSize: z.number().int().positive().optional().default(50),
+  nextCursor: z.object({ isPinned: z.boolean(), createdAt: timestamp, id: uuid }).nullable().default(null),
+});
 export const memoryEntryResponseSchema = z.object({ entry: memoryEntrySchema });
 export const supersedeMemoryEntryResponseSchema = z.object({ oldEntry: memoryEntrySchema, newEntry: memoryEntrySchema });
 export type MemoryListResponse = z.infer<typeof memoryListResponseSchema>;
@@ -102,7 +116,25 @@ export const memoryListQuerySchema = z.object({
   archived: z.literal('true').optional(),
   superseded: z.literal('true').optional(),
   search: optionalText(200).optional(),
-}).strict();
+  // Restricts to entries getProjectResume actually needs (pinned or
+  // importance in important/critical) — the same predicate
+  // compareImportantMemory (resume/store.ts) filters for in JS, pushed into
+  // SQL so the query itself is bounded instead of loading every entry.
+  importantOnly: z.literal('true').optional(),
+  pageSize: z.coerce.number().int().min(1).max(200).optional().default(50),
+  // Cursor over (is_pinned, created_at, id) — is_pinned is the primary sort
+  // key (see memoryListResponseSchema's doc comment), so all three must be
+  // supplied together or not at all.
+  beforeIsPinned: z.enum(['true', 'false']).optional(),
+  beforeCreatedAt: timestamp.optional(),
+  beforeId: uuid.optional(),
+}).strict().superRefine((value, ctx) => {
+  const cursorFields = [value.beforeIsPinned, value.beforeCreatedAt, value.beforeId];
+  const presentCount = cursorFields.filter((field) => field !== undefined).length;
+  if (presentCount !== 0 && presentCount !== 3) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['beforeCreatedAt'], message: 'beforeIsPinned, beforeCreatedAt and beforeId must be supplied together.' });
+  }
+});
 export type MemoryListQuery = z.infer<typeof memoryListQuerySchema>;
 
 // ---------------------------------------------------------------------------
@@ -170,7 +202,23 @@ export type CheckpointSummary = z.infer<typeof checkpointSummarySchema>;
 export const checkpointDetailSchema = checkpointSummarySchema.extend({ snapshot: checkpointSnapshotSchema });
 export type CheckpointDetail = z.infer<typeof checkpointDetailSchema>;
 
-export const checkpointListResponseSchema = z.object({ checkpoints: z.array(checkpointSummarySchema) });
+export const checkpointListQuerySchema = z.object({
+  archived: z.literal('true').optional(),
+  pageSize: z.coerce.number().int().min(1).max(100).optional().default(50),
+  beforeCreatedAt: timestamp.optional(),
+  beforeId: uuid.optional(),
+}).strict().superRefine((value, ctx) => {
+  if ((value.beforeCreatedAt === undefined) !== (value.beforeId === undefined)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['beforeCreatedAt'], message: 'beforeCreatedAt and beforeId must be supplied together.' });
+  }
+});
+export type CheckpointListQuery = z.infer<typeof checkpointListQuerySchema>;
+
+export const checkpointListResponseSchema = z.object({
+  checkpoints: z.array(checkpointSummarySchema),
+  pageSize: z.number().int().positive().optional().default(50),
+  nextCursor: z.object({ createdAt: timestamp, id: uuid }).nullable().default(null),
+});
 export const checkpointDetailResponseSchema = z.object({ checkpoint: checkpointDetailSchema });
 export const checkpointSummaryResponseSchema = z.object({ checkpoint: checkpointSummarySchema });
 export type CheckpointListResponse = z.infer<typeof checkpointListResponseSchema>;

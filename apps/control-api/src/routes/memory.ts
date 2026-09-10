@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
-  createCheckpointRequestSchema, createMemoryEntryRequestSchema, memoryListQuerySchema,
+  checkpointListQuerySchema, createCheckpointRequestSchema, createMemoryEntryRequestSchema, memoryListQuerySchema,
   supersedeMemoryEntryRequestSchema, updateMemoryEntryRequestSchema, uuidSchema,
 } from '@project-control/contracts';
 import type { AppContext } from '../context.js';
@@ -60,7 +60,7 @@ export const memoryRoutes = (ctx: AppContext): FastifyPluginAsync => async (app)
   app.get('/api/projects/:projectId/memory', { preHandler: requireAuth }, async (request, reply) => {
     const { projectId } = ids(request);
     const query = parse(memoryListQuerySchema, request.query);
-    return reply.send({ entries: await listMemory(ctx.db, projectId!, query) });
+    return reply.send(await listMemory(ctx.db, projectId!, query));
   });
   app.get('/api/projects/:projectId/memory/:entryId', { preHandler: requireAuth }, async (request, reply) => {
     const { projectId, entryId } = ids(request);
@@ -102,8 +102,8 @@ export const memoryRoutes = (ctx: AppContext): FastifyPluginAsync => async (app)
   // --- Checkpoints -------------------------------------------------------------
   app.get('/api/projects/:projectId/checkpoints', { preHandler: requireAuth }, async (request, reply) => {
     const { projectId } = ids(request);
-    const archived = (request.query as { archived?: string }).archived === 'true';
-    return reply.send({ checkpoints: await listCheckpoints(ctx.db, projectId!, archived) });
+    const query = parse(checkpointListQuerySchema, request.query);
+    return reply.send(await listCheckpoints(ctx.db, projectId!, query));
   });
   app.get('/api/projects/:projectId/checkpoints/:checkpointId', { preHandler: requireAuth }, async (request, reply) => {
     const { projectId, checkpointId } = ids(request);
