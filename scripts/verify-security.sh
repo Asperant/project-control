@@ -218,7 +218,8 @@ if [[ -d "$PC_SECRETS_DIR" ]]; then
   fi
 
   if is_root; then
-    bad_mode=0; world_readable=0; wrong_owner=0; total=0
+    bad_mode=0; world_readable=0; wrong_owner=0; trailing_ws=0; total=0
+    trailing_ws_names=""
     while IFS= read -r -d '' file; do
       total=$((total+1))
       mode="$(stat -c '%a' "$file")"
@@ -226,6 +227,38 @@ if [[ -d "$PC_SECRETS_DIR" ]]; then
       [[ "$owner" == "root" ]] || wrong_owner=$((wrong_owner+1))
       [[ "$mode" == "600" || "$mode" == "640" || "$mode" == "400" ]] || bad_mode=$((bad_mode+1))
       (( 0$mode & 0004 )) && world_readable=$((world_readable+1))
+
+      # write_secret() (scripts/lib/common.sh) deliberately writes no trailing
+      # newline: the value is the exact byte string a consumer will read back
+      # and compare/hash. A stray trailing byte silently changes the secret's
+      # effective value without changing anything visible about the file
+      # (size and content look "right" at a glance), which is exactly how a
+      # credential ends up failing to authenticate for a reason nobody can
+      # see. Content is never read beyond this one trailing byte.
+      #
+      # n8n_encryption_key is a documented exception, not weakened coverage:
+      # generate-secrets.sh's own SECRET_SPECS marks it "NEVER rotate
+      # casually" because every credential n8n has ever encrypted becomes
+      # unreadable the moment its effective value changes. Even rewriting the
+      # file to strip a byte n8n's own reader may or may not already ignore
+      # is exactly the kind of casual touch that warning exists to prevent —
+      # so this check must never be the thing that nudges an operator into
+      # "fixing" it. Every other secret in this deployment is a randomly
+      # generated token with no such constraint (see secrets.ts's own
+      # comment) and is safe to flag and, once confirmed dead on every
+      # consumer's read path, remediate.
+      if [[ "$(basename "$file")" == n8n_encryption_key ]]; then
+        last_byte_hex="$(tail -c 1 -- "$file" 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+        case "$last_byte_hex" in
+          0a|0d|09|20) log_warn "n8n_encryption_key ends in a whitespace byte — NOT auto-remediated: never rotate or rewrite this file casually (see docs/security-model.md)" ;;
+        esac
+        continue
+      fi
+
+      last_byte_hex="$(tail -c 1 -- "$file" 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+      case "$last_byte_hex" in
+        0a|0d|09|20) trailing_ws=$((trailing_ws+1)); trailing_ws_names+="$(basename "$file") " ;;
+      esac
     done < <(find "$PC_SECRETS_DIR" -type f -print0 2>/dev/null)
 
     if (( total == 0 )); then
@@ -237,6 +270,9 @@ if [[ -d "$PC_SECRETS_DIR" ]]; then
                                 || record_check FAIL SEC-003 "${world_readable} secret file(s) are world-readable" ""
       (( wrong_owner == 0 ))    && record_check PASS SEC-004 "All secret files are root-owned" "" \
                                 || record_check FAIL SEC-004 "${wrong_owner} secret file(s) are not root-owned" ""
+      (( trailing_ws == 0 ))    && record_check PASS SEC-006 "No secret file ends in a whitespace byte" "" \
+                                || record_check FAIL SEC-006 "${trailing_ws}/${total} secret file(s) end in a whitespace byte" \
+                                     "$(printf '%s' "$trailing_ws_names" | head -c 200) — read docs/security-model.md before rotating; n8n_encryption_key must never be rotated casually"
     fi
   else
     record_check SKIP SEC-002 "Secret file permission audit" "requires root"
@@ -595,8 +631,343 @@ if [[ -n "$(container_id postgres)" ]] && is_root; then
   else
     record_check FAIL PGS-019 "Repository Action settlement/lifecycle trigger query failed" "cannot confirm trigger state (missing table/relation, connectivity or permission problem)"
   fi
+
+  # Service identity (0015/0016) — same WHERE-false-probe / catalog-inspection
+  # style as project_actions/work_sessions above.
+  delete_stderr="$(docker exec -i "$pg_cid" env PGPASSWORD="$control_pw" \
+       psql -U control_app -d project_control -tAc \
+       "DELETE FROM service_tokens WHERE false" 2>&1 >/dev/null)" && delete_status=0 || delete_status=$?
+  if (( delete_status == 0 )); then
+    record_check FAIL PGS-020 "control_app can DELETE service_tokens" "revoked/expired tokens must never be physically deleted"
+  elif _mutation_denied_by_privilege "$delete_stderr"; then
+    record_check PASS PGS-020 "control_app cannot DELETE service_tokens" "no physical deletion"
+  else
+    record_check FAIL PGS-020 "DELETE probe against service_tokens failed for a reason other than privilege denial" "cannot confirm the append-only guarantee (e.g. the table may not be migrated yet)"
+  fi
+
+  # `INSERT ... VALUES (...) WHERE false` is not valid PostgreSQL syntax —
+  # WHERE only attaches to an INSERT ... SELECT source, never to VALUES(...).
+  # The VALUES form here previously always failed with a syntax error
+  # regardless of backup_reader's actual privileges, indistinguishable from a
+  # real "cannot confirm" result — it went unnoticed because service_accounts
+  # (migration 0015) had never been applied against a real database until
+  # now. SELECT ... WHERE false is the same never-inserts probe PGS-023 (the
+  # very next check, against service_tokens) already uses correctly.
+  insert_stderr="$(docker exec -i "$pg_cid" env PGPASSWORD="$backup_pw" \
+       psql -U backup_reader -d project_control -tAc \
+       "INSERT INTO service_accounts (key, display_name, scopes) SELECT 'probe', 'probe', ARRAY['project:read'] WHERE false" \
+       2>&1 >/dev/null)" && insert_status=0 || insert_status=$?
+  if (( insert_status == 0 )); then
+    record_check FAIL PGS-021 "backup_reader can write service_accounts" "the table must remain SELECT-only"
+  elif _mutation_denied_by_privilege "$insert_stderr"; then
+    record_check PASS PGS-021 "backup_reader cannot write service_accounts" "read-only enforced"
+  else
+    record_check FAIL PGS-021 "INSERT probe against service_accounts failed for a reason other than privilege denial" "cannot confirm the read-only guarantee (e.g. the table may not be migrated yet)"
+  fi
+
+  # PGS-020/PGS-021 above each cover one table (service_tokens DELETE,
+  # service_accounts write); these two close the diagonal so both tables get
+  # both probes, the same coverage project_actions already has from PGS-017/018.
+  delete_stderr="$(docker exec -i "$pg_cid" env PGPASSWORD="$control_pw" \
+       psql -U control_app -d project_control -tAc \
+       "DELETE FROM service_accounts WHERE false" 2>&1 >/dev/null)" && delete_status=0 || delete_status=$?
+  if (( delete_status == 0 )); then
+    record_check FAIL PGS-022 "control_app can DELETE service_accounts" "service accounts must never be physically deleted"
+  elif _mutation_denied_by_privilege "$delete_stderr"; then
+    record_check PASS PGS-022 "control_app cannot DELETE service_accounts" "no physical deletion"
+  else
+    record_check FAIL PGS-022 "DELETE probe against service_accounts failed for a reason other than privilege denial" "cannot confirm the append-only guarantee (e.g. the table may not be migrated yet)"
+  fi
+
+  insert_stderr="$(docker exec -i "$pg_cid" env PGPASSWORD="$backup_pw" \
+       psql -U backup_reader -d project_control -tAc \
+       "INSERT INTO service_tokens (account_id, token_hash, prefix, scopes, expires_at)
+          SELECT id, repeat('a',64), 'pcs_deadbeef', ARRAY['project:read'], now() FROM service_accounts WHERE false" \
+       2>&1 >/dev/null)" && insert_status=0 || insert_status=$?
+  if (( insert_status == 0 )); then
+    record_check FAIL PGS-023 "backup_reader can write service_tokens" "the table must remain SELECT-only"
+  elif _mutation_denied_by_privilege "$insert_stderr"; then
+    record_check PASS PGS-023 "backup_reader cannot write service_tokens" "read-only enforced"
+  else
+    record_check FAIL PGS-023 "INSERT probe against service_tokens failed for a reason other than privilege denial" "cannot confirm the read-only guarantee (e.g. the table may not be migrated yet)"
+  fi
+
+  if svc_guard="$(run_psql_scalar control_app "$control_pw" \
+       "SELECT count(*) FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid
+          WHERE t.tgenabled <> 'D' AND pg_get_functiondef(p.oid) ILIKE '%RAISE EXCEPTION%'
+            AND ((t.tgname='service_tokens_guard_scopes' AND t.tgrelid='service_tokens'::regclass AND p.proname='guard_service_token_scopes')
+              OR (t.tgname='service_tokens_guard_mutation' AND t.tgrelid='service_tokens'::regclass AND p.proname='guard_service_token_mutation'))")"; then
+    if [[ "${svc_guard:-0}" == "2" ]]; then
+      record_check PASS SVC-002 "Service token scope-ceiling and immutability triggers are enabled and guarded" \
+        "live behavior proven by test/integration/service-tokens.test.ts"
+    else
+      record_check FAIL SVC-002 "Service token scope-ceiling/immutability triggers are incomplete" "found ${svc_guard:-0}/2"
+    fi
+  else
+    record_check FAIL SVC-002 "Service token trigger query failed" "cannot confirm trigger state (missing table/relation, connectivity or permission problem)"
+  fi
+
+  # SVC-001: no plaintext token column exists, and the hash is what is
+  # actually looked up by. A column named token/value/secret/plaintext next
+  # to token_hash would mean a future change started storing the credential
+  # itself, which is exactly the sessions-table property this table copies.
+  if svc_columns="$(run_psql_scalar control_app "$control_pw" \
+       "SELECT string_agg(column_name, ',') FROM information_schema.columns
+          WHERE table_name='service_tokens' AND table_schema='public'")"; then
+    if printf '%s' "${svc_columns:-}" | grep -qiE '(^|,)(token|value|plaintext|secret)(,|$)' ; then
+      record_check FAIL SVC-001 "service_tokens has a plaintext-shaped column" "found: ${svc_columns}"
+    elif printf '%s' "${svc_columns:-}" | grep -q 'token_hash'; then
+      record_check PASS SVC-001 "service_tokens stores only a hash, no plaintext-shaped column" "columns: ${svc_columns}"
+    else
+      record_check FAIL SVC-001 "service_tokens.token_hash column is missing" "found: ${svc_columns:-<none>}"
+    fi
+  else
+    record_check FAIL SVC-001 "service_tokens column query failed" "cannot confirm schema shape (missing table or connectivity problem)"
+  fi
+
+  # SVC-006: the scope vocabulary is closed at the database layer, not just in
+  # the TypeScript enum — an operator with only the migrator credential (no
+  # code deploy) cannot grant a scope this platform's routes do not know how
+  # to check.
+  if svc_scope_check="$(run_psql_scalar control_app "$control_pw" \
+       "SELECT count(*) FROM pg_constraint
+          WHERE conname IN ('service_accounts_scopes_known','service_tokens_scopes_known')")"; then
+    if [[ "${svc_scope_check:-0}" == "2" ]]; then
+      record_check PASS SVC-006 "Service scope vocabulary is closed by a database CHECK constraint" ""
+    else
+      record_check FAIL SVC-006 "Service scope CHECK constraints are missing" "found ${svc_scope_check:-0}/2"
+    fi
+  else
+    record_check FAIL SVC-006 "Service scope constraint query failed" "cannot confirm schema shape (missing table or connectivity problem)"
+  fi
 else
   record_check SKIP PGS-001 "PostgreSQL role isolation" "requires root and a running postgres container"
+fi
+
+# =============================================================================
+# 6b. Service identity — live HTTP checks that need no minted token
+#
+# SVC-003 proves the "closed by default" half of the Bearer-auth model
+# without ever calling `create-service-token`: a route that only ever reads
+# the session cookie (every route except /api/automation/whoami and the new
+# service-token admin routes) must ignore an Authorization header entirely,
+# even a well-formed-looking one. That needs no valid token to exist, so it
+# stays inside this script's "strictly read-only" contract.
+#
+# SVC-004 (mixed cookie+Bearer credentials) and SVC-005 (revoked/expired/
+# disabled-account rejection) genuinely need a live session or a committed
+# token row to exercise — proving them here would mean this "read-only"
+# script minting real credentials or logging in as an operator. Both are
+# proven instead by test/integration/service-tokens.test.ts, which is exactly
+# what PGS-012/016/019 above already do for trigger *behavior* as opposed to
+# trigger *existence*.
+# =============================================================================
+log_step "Service identity: closed-by-default Bearer routing"
+
+if portal_response="$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' \
+     -H 'Authorization: Bearer pcs_0000000000000000000000000000000000000000000' \
+     "http://127.0.0.1:8780/api/auth/me" 2>/dev/null)"; then
+  anon_response="$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:8780/api/auth/me" 2>/dev/null || echo '')"
+  if [[ "$portal_response" == "401" && "$portal_response" == "$anon_response" ]]; then
+    record_check PASS SVC-003 "A cookie-only route ignores a Bearer header (same 401 as anonymous)" ""
+  else
+    record_check FAIL SVC-003 "A cookie-only route responded differently to a Bearer header than to no credential at all" \
+      "bearer=${portal_response} anonymous=${anon_response}"
+  fi
+else
+  record_check SKIP SVC-003 "Closed-by-default Bearer routing" "portal not reachable on 127.0.0.1:8780"
+fi
+
+# =============================================================================
+# 6c. Automation — workflow registry and n8n confinement
+#
+# AUT-004 (an unknown workflowKey is rejected end to end, with an audit row)
+# is not re-proven here for the same reason SVC-004/SVC-005 are not: it
+# needs a live session or token, which this "strictly read-only" script does
+# not mint. It is proven by test/integration/automation.test.ts.
+# =============================================================================
+log_step "Automation: manifest and n8n confinement"
+
+# Nested under config/status: see infra/compose/compose.yaml's comment on
+# the control-api /config mount for why this lives here rather than in a
+# sibling config/automation directory.
+MANIFEST_FILE="${PC_ROOT}/config/status/automation/manifest.json"
+if [[ -f "$MANIFEST_FILE" ]]; then
+  manifest_owner="$(stat -c '%U' "$MANIFEST_FILE" 2>/dev/null || echo '?')"
+  manifest_mode="$(stat -c '%a' "$MANIFEST_FILE" 2>/dev/null || echo '?')"
+  if [[ "$manifest_owner" == "root" && "$manifest_mode" == "644" ]]; then
+    record_check PASS AUT-003 "Workflow manifest is root-owned, 0644" ""
+  else
+    record_check FAIL AUT-003 "Workflow manifest has unexpected ownership/mode" "owner=${manifest_owner} mode=${manifest_mode}"
+  fi
+else
+  record_check WARN AUT-003 "No workflow manifest installed yet" "run: sudo ./pcctl install"
+fi
+
+# control_app must never be able to delete run history; workflow_run_steps
+# is stricter still — no UPDATE grant at all, so a step cannot be rewritten
+# even while its parent run is still open.
+if [[ -n "${pg_cid:-}" ]] && is_root; then
+  delete_stderr="$(docker exec -i "$pg_cid" env PGPASSWORD="$control_pw" \
+       psql -U control_app -d project_control -tAc \
+       "DELETE FROM workflow_runs WHERE false" 2>&1 >/dev/null)" && delete_status=0 || delete_status=$?
+  if (( delete_status == 0 )); then
+    record_check FAIL AUT-001 "control_app can DELETE workflow_runs" "run history must never be physically deleted"
+  elif _mutation_denied_by_privilege "$delete_stderr"; then
+    record_check PASS AUT-001 "control_app cannot DELETE workflow_runs" "no physical deletion"
+  else
+    record_check FAIL AUT-001 "DELETE probe against workflow_runs failed for a reason other than privilege denial" "cannot confirm the append-only guarantee (e.g. the table may not be migrated yet)"
+  fi
+
+  update_stderr="$(docker exec -i "$pg_cid" env PGPASSWORD="$control_pw" \
+       psql -U control_app -d project_control -tAc \
+       "UPDATE workflow_run_steps SET name = name WHERE false" 2>&1 >/dev/null)" && update_status=0 || update_status=$?
+  if (( update_status == 0 )); then
+    record_check FAIL AUT-002 "control_app can UPDATE workflow_run_steps" "step history must be append-only"
+  elif _mutation_denied_by_privilege "$update_stderr"; then
+    record_check PASS AUT-002 "control_app cannot UPDATE workflow_run_steps" "append-only enforced"
+  else
+    record_check FAIL AUT-002 "UPDATE probe against workflow_run_steps failed for a reason other than privilege denial" "cannot confirm the append-only guarantee (e.g. the table may not be migrated yet)"
+  fi
+
+  # AUT-001/AUT-002 above each cover one probe on one table (workflow_runs
+  # DELETE, workflow_run_steps UPDATE); these three close the remaining
+  # diagonal — control_app must not be able to DELETE a step either (not just
+  # UPDATE one), and backup_reader must stay SELECT-only on both tables —
+  # the same full coverage project_actions has via PGS-017/018.
+  step_delete_stderr="$(docker exec -i "$pg_cid" env PGPASSWORD="$control_pw" \
+       psql -U control_app -d project_control -tAc \
+       "DELETE FROM workflow_run_steps WHERE false" 2>&1 >/dev/null)" && step_delete_status=0 || step_delete_status=$?
+  if (( step_delete_status == 0 )); then
+    record_check FAIL AUT-005 "control_app can DELETE workflow_run_steps" "step history must never be physically deleted"
+  elif _mutation_denied_by_privilege "$step_delete_stderr"; then
+    record_check PASS AUT-005 "control_app cannot DELETE workflow_run_steps" "no physical deletion"
+  else
+    record_check FAIL AUT-005 "DELETE probe against workflow_run_steps failed for a reason other than privilege denial" "cannot confirm the append-only guarantee (e.g. the table may not be migrated yet)"
+  fi
+
+  runs_insert_stderr="$(docker exec -i "$pg_cid" env PGPASSWORD="$backup_pw" \
+       psql -U backup_reader -d project_control -tAc \
+       "INSERT INTO workflow_runs (workflow_key, trigger_kind, triggered_by_user)
+          SELECT 'probe-workflow', 'manual', id FROM users WHERE false" \
+       2>&1 >/dev/null)" && runs_insert_status=0 || runs_insert_status=$?
+  if (( runs_insert_status == 0 )); then
+    record_check FAIL AUT-006 "backup_reader can write workflow_runs" "the table must remain SELECT-only"
+  elif _mutation_denied_by_privilege "$runs_insert_stderr"; then
+    record_check PASS AUT-006 "backup_reader cannot write workflow_runs" "read-only enforced"
+  else
+    record_check FAIL AUT-006 "INSERT probe against workflow_runs failed for a reason other than privilege denial" "cannot confirm the read-only guarantee (e.g. the table may not be migrated yet)"
+  fi
+
+  steps_insert_stderr="$(docker exec -i "$pg_cid" env PGPASSWORD="$backup_pw" \
+       psql -U backup_reader -d project_control -tAc \
+       "INSERT INTO workflow_run_steps (run_id, position, name, status)
+          SELECT id, 0, 'probe', 'passed' FROM workflow_runs WHERE false" \
+       2>&1 >/dev/null)" && steps_insert_status=0 || steps_insert_status=$?
+  if (( steps_insert_status == 0 )); then
+    record_check FAIL AUT-007 "backup_reader can write workflow_run_steps" "the table must remain SELECT-only"
+  elif _mutation_denied_by_privilege "$steps_insert_stderr"; then
+    record_check PASS AUT-007 "backup_reader cannot write workflow_run_steps" "read-only enforced"
+  else
+    record_check FAIL AUT-007 "INSERT probe against workflow_run_steps failed for a reason other than privilege denial" "cannot confirm the read-only guarantee (e.g. the table may not be migrated yet)"
+  fi
+else
+  record_check SKIP AUT-001 "workflow_runs append-only grant" "requires root and a running postgres container"
+  record_check SKIP AUT-002 "workflow_run_steps append-only grant" "requires root and a running postgres container"
+  record_check SKIP AUT-005 "workflow_run_steps DELETE denial" "requires root and a running postgres container"
+  record_check SKIP AUT-006 "workflow_runs read-only for backup_reader" "requires root and a running postgres container"
+  record_check SKIP AUT-007 "workflow_run_steps read-only for backup_reader" "requires root and a running postgres container"
+fi
+
+# N8N-001: functional — no webhook is registered, so this deployment has no
+# inbound HTTP surface through n8n regardless of what the container's
+# network position could otherwise reach.
+if webhook_response="$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' \
+     "http://127.0.0.1:5678/webhook/pcctl-verify-security-probe-$$" 2>/dev/null)"; then
+  if [[ "$webhook_response" == "404" ]]; then
+    record_check PASS N8N-001 "No webhook is registered on n8n" "probe returned 404"
+  else
+    record_check FAIL N8N-001 "n8n responded unexpectedly to a webhook probe" "HTTP ${webhook_response}, expected 404"
+  fi
+else
+  record_check SKIP N8N-001 "n8n webhook probe" "n8n not reachable on 127.0.0.1:5678"
+fi
+
+# N8N-002: static lint of every shipped workflow file — see
+# scripts/lib/workflow-lint.py and tests/workflow-lint-regression.sh.
+if have python3 && [[ -f "$MANIFEST_FILE" || -f "${PC_REPO_ROOT:-}/infra/n8n/workflows/manifest.json" ]]; then
+  lint_manifest="${MANIFEST_FILE}"
+  [[ -f "$lint_manifest" ]] || lint_manifest="${PC_REPO_ROOT}/infra/n8n/workflows/manifest.json"
+  shopt -s nullglob
+  lint_targets=("${PC_ROOT}/config/status/automation/workflows"/*.workflow.json)
+  shopt -u nullglob
+  if (( ${#lint_targets[@]} == 0 )) && [[ -n "${PC_REPO_ROOT:-}" ]]; then
+    shopt -s nullglob
+    lint_targets=("${PC_REPO_ROOT}/infra/n8n/workflows"/*.workflow.json)
+    shopt -u nullglob
+  fi
+  if (( ${#lint_targets[@]} > 0 )); then
+    if lint_output="$(python3 "${PC_SCRIPTS_DIR}/lib/workflow-lint.py" "$lint_manifest" "${lint_targets[@]}" 2>&1)"; then
+      record_check PASS N8N-002 "Every shipped workflow file passes the static lint" "${#lint_targets[@]} file(s)"
+    else
+      record_check FAIL N8N-002 "One or more workflow files failed the static lint" "$(printf '%s' "$lint_output" | head -c 300)"
+    fi
+  else
+    record_check WARN N8N-002 "No *.workflow.json files found to lint" ""
+  fi
+else
+  record_check SKIP N8N-002 "Workflow static lint" "python3 or the manifest is unavailable"
+fi
+
+# N8N-003: the automation surface is reachable from n8n's own network
+# position — a positive check, complementing the negative database-isolation
+# proof PGS-006 already gives (n8n_app cannot connect to project_control).
+n8n_cid="$(container_id n8n)"
+if [[ -n "$n8n_cid" ]]; then
+  if docker exec "$n8n_cid" wget -q -T 5 -O /dev/null "http://control-api:8080/health/live" 2>/dev/null; then
+    record_check PASS N8N-003 "n8n can reach the Control API over the application network" ""
+  else
+    record_check FAIL N8N-003 "n8n cannot reach the Control API" "the automation surface would be unusable"
+  fi
+else
+  record_check SKIP N8N-003 "n8n reachability to Control API" "n8n container not running"
+fi
+
+# N8N-004/N8N-005/N8N-006/N8N-007: `n8n audit`, run against every category it
+# has (not the tool's own narrower default) and classified by
+# scripts/lib/n8n-audit-classify.py — see that file's module doc for why a
+# single "grep communityPackagesEnabled" is not what runs here. In short:
+# N8N-004 is the community-packages setting specifically; N8N-005 is n8n's
+# own "a newer version exists" notice, expected and accepted for a
+# deployment that pins every image to a digest on purpose (WARN, not FAIL);
+# N8N-007 is n8n's "Official risky nodes" finding, accepted (WARN) only when
+# every flagged node is HTTP Request or Code — the two node types this
+# deployment's own shipped, reviewed workflows are built on, with the
+# genuinely dangerous Execute Command excluded at the instance level
+# regardless; N8N-006 is a catch-all that still fails closed on ANY OTHER
+# finding this deployment has not explicitly reviewed — a Credentials/
+# Database/Filesystem Risk Report, a Nodes Risk Report naming an
+# unrecognised node type, or a new section inside Instance Risk Report none
+# of the above recognises. The classifier's own behavior against synthetic
+# fixtures (including that last, most important property) is regression-
+# tested in tests/n8n-audit-classify-regression.sh, independent of a live
+# n8n.
+if [[ -n "$n8n_cid" ]]; then
+  if audit_output="$(docker exec "$n8n_cid" n8n audit --categories=credentials,database,nodes,instance,filesystem 2>/dev/null)" \
+       && [[ -n "$audit_output" ]]; then
+    while IFS='|' read -r status id desc detail; do
+      [[ -n "$status" ]] || continue
+      record_check "$status" "$id" "$desc" "$detail"
+    done < <(printf '%s' "$audit_output" | python3 "${PC_SCRIPTS_DIR}/lib/n8n-audit-classify.py")
+  else
+    record_check WARN N8N-004 "n8n audit did not run" "cannot confirm instance security settings"
+    record_check WARN N8N-005 "n8n audit did not run" "cannot confirm version-pinning acknowledgement"
+    record_check WARN N8N-006 "n8n audit did not run" "cannot confirm no unexpected findings"
+  fi
+else
+  record_check SKIP N8N-004 "n8n audit: community packages" "n8n container not running"
+  record_check SKIP N8N-005 "n8n audit: version notice" "n8n container not running"
+  record_check SKIP N8N-006 "n8n audit: unexpected findings" "n8n container not running"
 fi
 
 # =============================================================================

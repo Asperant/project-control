@@ -154,6 +154,8 @@ upstream registry. No `latest`, no floating tag, no `^` or `~` in any manifest.
 | [manual-roadmap.md](docs/manual-roadmap.md) | Manual milestones, tasks, criteria, dependencies, notes and progress |
 | [project-memory.md](docs/project-memory.md) | Manual memory entries, supersede history, immutable checkpoints, "Where was I?" |
 | [repository-actions.md](docs/repository-actions.md) | Controlled, previewed repository commits: plan → confirm → execute → verify |
+| [service-accounts.md](docs/service-accounts.md) | Machine (Bearer token) identity for automation callers: scope, minting, closed-by-default routing |
+| [automation.md](docs/automation.md) | n8n workflow runs: manifest, claim/settle lifecycle, idempotency, notification policy |
 | [installation.md](docs/installation.md) | Clean-machine install on Ubuntu 22.04 |
 | [manual-checkpoints.md](docs/manual-checkpoints.md) | The five steps that need a human |
 | [operations.md](docs/operations.md) | Daily operation, logs, secret rotation |

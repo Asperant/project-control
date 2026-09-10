@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "workflows": [
+    {
+      "key": "system-health",
+      "name": "System Health",
+      "description": "Reads /api/system/status; reports degraded/down components.",
+      "trigger": "scheduled",
+      "schedule": "*/30 * * * *",
+      "scope": "global",
+      "timeoutSeconds": 120,
+      "idempotencyWindow": "hour",
+      "requiredScopes": ["automation:run", "system:read"],
+      "notify": { "info": false, "warning": true, "critical": true }
+    },
+    {
+      "key": "deployment-readiness",
+      "name": "Deployment Readiness",
+      "description": "Reads the daily verify/verify-security report, backup age and pending Repository Actions.",
+      "trigger": "scheduled",
+      "schedule": "0 7 * * *",
+      "scope": "global",
+      "timeoutSeconds": 120,
+      "idempotencyWindow": "day",
+      "requiredScopes": ["automation:run", "system:read"],
+      "notify": { "info": false, "warning": true, "critical": true }
+    },
+    {
+      "key": "backup-health",
+      "name": "Backup Health Report",
+      "description": "Reads backup-status.json: last successful backup age and last restore-test age.",
+      "trigger": "scheduled",
+      "schedule": "0 9 * * *",
+      "scope": "global",
+      "timeoutSeconds": 120,
+      "idempotencyWindow": "day",
+      "requiredScopes": ["automation:run", "system:read"],
+      "notify": { "info": false, "warning": true, "critical": true }
+    },
+    {
+      "key": "checkpoint-reminder",
+      "name": "Checkpoint Reminder",
+      "description": "Reads open Work Sessions; flags ones open longer than a threshold with no checkpoint.",
+      "trigger": "scheduled",
+      "schedule": "0 18 * * 1-5",
+      "scope": "global",
+      "timeoutSeconds": 120,
+      "idempotencyWindow": "day",
+      "requiredScopes": ["automation:run", "project:read"],
+      "notify": { "info": false, "warning": true, "critical": false }
+    },
+    {
+      "key": "weekly-project-report",
+      "name": "Weekly Project Report",
+      "description": "Reads roadmap progress and recent activity per project; attaches a markdown summary artefact to the run.",
+      "trigger": "scheduled",
+      "schedule": "0 8 * * 1",
+      "scope": "global",
+      "timeoutSeconds": 300,
+      "idempotencyWindow": "day",
+      "requiredScopes": ["automation:run", "project:read", "report:write"],
+      "notify": { "info": true, "warning": false, "critical": false }
+    }
+  ]
+}

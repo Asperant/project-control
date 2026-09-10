@@ -7,6 +7,7 @@ import type {
 import { ApiError, api } from '../api-client';
 import { StatusBadge } from './StatusBadge';
 import { ProjectsRoot } from './projects/ProjectsRoot';
+import { AutomationView } from './automation/AutomationView';
 
 const POLL_INTERVAL_MS = 15_000;
 
@@ -23,8 +24,10 @@ export function Dashboard({
   onSignedOut: () => void;
   onSessionExpired: () => void;
 }): React.JSX.Element {
-  const [tab, setTab] = useState<'system' | 'projects'>('projects');
+  const [tab, setTab] = useState<'system' | 'projects' | 'automation'>('projects');
   const canWriteProjects = session.user.role === 'admin' || session.user.role === 'operator';
+  const canWriteAutomation = session.user.role === 'admin' || session.user.role === 'operator';
+  const isAdmin = session.user.role === 'admin';
 
   return (
     <>
@@ -36,6 +39,9 @@ export function Dashboard({
         <nav className="tab-nav" aria-label="Sections">
           <button type="button" className={tab === 'projects' ? 'tab-active' : ''} onClick={() => setTab('projects')}>
             Projects
+          </button>
+          <button type="button" className={tab === 'automation' ? 'tab-active' : ''} onClick={() => setTab('automation')}>
+            Automation
           </button>
           <button type="button" className={tab === 'system' ? 'tab-active' : ''} onClick={() => setTab('system')}>
             System
@@ -53,9 +59,13 @@ export function Dashboard({
       </header>
 
       <main id="main-content">
-        {tab === 'projects' ? (
+        {tab === 'projects' && (
           <ProjectsRoot canWrite={canWriteProjects} onSessionExpired={onSessionExpired} />
-        ) : (
+        )}
+        {tab === 'automation' && (
+          <AutomationView isAdmin={isAdmin} canWrite={canWriteAutomation} onSessionExpired={onSessionExpired} />
+        )}
+        {tab === 'system' && (
           <SystemPanel session={session} onSessionExpired={onSessionExpired} />
         )}
       </main>

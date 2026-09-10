@@ -147,6 +147,123 @@
 - Status: mitigated; the `.git`-only write scope and the CAS-protected commit
   are release gates for this feature.
 
+## Service identity: a leaked service token authenticates as a machine
+
+- Category: security.
+- Impact: `sudo ./pcctl create-service-token` mints a Bearer credential that,
+  if leaked (for example, from n8n's credential store, or a copy-pasted
+  terminal scrollback), authenticates as that service account until revoked
+  or expired.
+- Mitigation: closed-by-default routing — only `/api/automation/*` reads the
+  `Authorization` header at all, so a leaked token reaches nothing else no
+  matter how it is used; a closed scope vocabulary with no execute/apply/
+  archive/delete member; a mandatory TTL (no unexpiring token); one-click,
+  database-trigger-enforced one-way revocation; only a SHA-256 ever
+  persisted, so a `backup_reader` dump contains nothing replayable; every
+  resolution failure and scope/kind denial audited with the account key and
+  token prefix, never the value.
+- How to test: `apps/control-api/test/integration/service-tokens.test.ts`
+  (mixed-credential rejection, revoked/expired/disabled-account rejection,
+  scope and principal-kind denial, audit coverage) plus `SVC-001`, `SVC-002`,
+  `SVC-003`, `SVC-006`, `PGS-020`, `PGS-021` on a migrated deployment.
+- Status: mitigated; the closed-by-default routing property and the
+  execute/apply-free scope vocabulary are release gates.
+
+## Stale deployment secrets can carry an unintended trailing byte
+
+- Category: operational / security.
+- Detail: while building service identity, a live deployment's
+  `n8n_encryption_key` and `pg_n8n_app_password` secret files were found to be
+  one byte longer than `scripts/generate-secrets.sh` intends (a trailing
+  whitespace byte) — n8n's own startup log already warns about this on every
+  restart. The generation and distribution code path
+  (`scripts/lib/common.sh:write_secret`, `scripts/generate-secrets.sh`) does
+  not add one and never has, back to this repository's first commit, so this
+  is a pre-existing artifact of how this one deployment's secrets were first
+  created, not a defect in the current code.
+- Mitigation: `SEC-006` in `verify-security.sh` fails a fresh check against
+  any secret file ending in a whitespace byte, so this cannot regress
+  silently on a new install or a future secret this platform mints.
+- Status: **watching, not yet remediated on the affected live host.**
+  `n8n_encryption_key` must never be rotated casually — doing so orphans
+  every credential n8n has encrypted — so fixing this specific host is an
+  operator decision, not something automated tooling should do unprompted.
+  See [security-model.md §6](security-model.md#6-secret-management) and
+  [service-accounts.md](service-accounts.md#verification) before acting.
+
+## Repository Actions: project_actions had no restore-test coverage
+
+- Category: disaster recovery / test coverage.
+- Detail: discovered while adding restore-test coverage for the new service
+  identity and automation tables — `project_actions` (migrations 0013/0014,
+  shipped before this work) was never added to `restore-test.sh`'s expected-
+  table list or given orphan/constraint checks, unlike every other feature's
+  tables (Work Sessions, Agent Runs, roadmap, memory). A restore that lost
+  or corrupted Repository Action history would not have been caught.
+- Mitigation applied now: `project_actions` was added to the expected-table
+  list, so a restore missing the table entirely is caught.
+- Status: **partially mitigated.** Table presence is now checked; the
+  deeper checks other features have (settled-row immutability trigger
+  presence, orphan/cross-project reference checks specific to
+  `project_actions`) are not yet added, since Repository Actions' data model
+  was outside this session's actual scope of work. This is a discovered,
+  pre-existing gap, not one introduced here — recorded so it is not lost.
+
+## Automation: n8n community packages were enabled by default
+
+- Category: security.
+- Impact: `N8N_COMMUNITY_PACKAGES_ENABLED` had no explicit value in
+  `compose.yaml` before this feature and defaulted to enabled, which would
+  let anyone with n8n UI access (Tailscale- and owner-account-gated, but a
+  boundary this platform's design otherwise refuses to lean on alone)
+  install an arbitrary third-party n8n node outside this platform's own
+  review — potentially including node types with capabilities the
+  compiled-in `NODES_EXCLUDE` list and `workflow-lint.py` have no visibility
+  into.
+- Mitigation: `N8N_COMMUNITY_PACKAGES_ENABLED: "false"` is now explicit in
+  `compose.yaml`; `N8N-004` asserts it live against a running instance's own
+  `n8n audit` output on every `verify-security` run.
+- How to test: `sudo ./pcctl verify-security` after a redeploy that picks up
+  the compose change; `N8N-004` must report the setting disabled.
+- Status: mitigated in code; **the live deployment this repository was
+  developed against has not yet been redeployed to pick up the change** —
+  `N8N-004` will correctly report `FAIL` on that host until it is.
+
+## Automation: manual-run claim latency
+
+- Category: operational.
+- Detail: Control API cannot call n8n (n8n publishes no inbound HTTP
+  surface, by design — see automation.md). A manual "Run now" therefore
+  opens a `queued` row that waits for n8n's own polling workflow to claim it
+  on its next scheduled tick, rather than starting immediately.
+- Mitigation: the panel shows `queued` and the queue time explicitly rather
+  than implying immediate execution; the poll interval is an operator
+  choice in the polling workflow's own schedule trigger, not hardcoded.
+- Status: accepted trade-off, not a defect — the alternative (a webhook n8n
+  exposes so Control API can push) would give this deployment its first
+  inbound HTTP surface, which is the one property this entire feature was
+  built to avoid.
+
+## Automation: partial-index idempotency semantics are easy to get backwards
+
+- Category: correctness / design lesson.
+- Detail: `workflow_runs_idempotency_idx` is a partial unique index. A first
+  version scoped its predicate to the terminal-success statuses it was
+  trying to deduplicate (`status IN ('completed','failed',
+  'waiting_for_approval')`) — but a partial index only constrains rows that
+  themselves satisfy its predicate, and a freshly inserted row is always
+  `queued` or `running`, never yet one of those three. That version could
+  never actually block a duplicate open at INSERT time; it silently
+  protected nothing. The corrected predicate excludes only `cancelled` and
+  `expired` (`status NOT IN ('cancelled','expired')`), so a fresh row
+  participates in the uniqueness check from the moment it exists.
+- Mitigation: caught by `apps/control-api/test/integration/automation.test.ts`
+  during development, before this migration was ever deployed anywhere; the
+  migration's own comment on the index documents the reasoning so the same
+  mistake is not reintroduced by a future "simplification."
+- Status: mitigated; the corrected predicate and its test coverage are a
+  release gate for this feature.
+
 ## Runner startup race creates a partial deployment or rollback
 
 - Category: release / availability / state consistency.

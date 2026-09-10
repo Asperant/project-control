@@ -40,6 +40,12 @@ import {
   workSessionAmendmentResponseSchema,
   workSessionListResponseSchema,
   workSessionResponseSchema,
+  workflowListResponseSchema,
+  workflowRunListResponseSchema,
+  workflowRunDetailSchema,
+  workflowRunResponseSchema,
+  serviceTokenListResponseSchema,
+  revokeServiceTokenResponseSchema,
   type AgentRunListResponse,
   type AgentRunResponse,
   type AgentRunPromptResponse,
@@ -111,6 +117,14 @@ import {
   type UpdateProjectCommandRequest,
   type UpdateProjectRequest,
   type UpdateProjectRuleRequest,
+  type WorkflowListResponse,
+  type WorkflowRunListQuery,
+  type WorkflowRunListResponse,
+  type WorkflowRunDetail,
+  type WorkflowRunResponse,
+  type RequestWorkflowRunRequest,
+  type ServiceTokenListResponse,
+  type RevokeServiceTokenResponse,
 } from '@project-control/contracts';
 
 /**
@@ -476,4 +490,20 @@ export const api = {
   updateWorkSession(projectId:string,sessionId:string,body:UpdateWorkSessionRequest):Promise<WorkSessionResponse>{return request(`/api/projects/${projectId}/work-sessions/${sessionId}`,workSessionResponseSchema,{method:'PATCH',body});},
   closeWorkSession(projectId:string,sessionId:string,body:CloseWorkSessionRequest):Promise<WorkSessionResponse>{return request(`/api/projects/${projectId}/work-sessions/${sessionId}/close`,workSessionResponseSchema,{method:'POST',body});},
   addWorkSessionAmendment(projectId:string,sessionId:string,body:AddWorkSessionAmendmentRequest):Promise<WorkSessionAmendmentResponse>{return request(`/api/projects/${projectId}/work-sessions/${sessionId}/amendments`,workSessionAmendmentResponseSchema,{method:'POST',body});},
+
+  // --- Automation ------------------------------------------------------------
+  listWorkflows(signal?:AbortSignal):Promise<WorkflowListResponse>{return request('/api/automation/workflows',workflowListResponseSchema,signal?{signal}:{});},
+  listAutomationRuns(query:Partial<WorkflowRunListQuery> = {},signal?:AbortSignal):Promise<WorkflowRunListResponse>{
+    const params=new URLSearchParams();
+    for(const [key,value] of Object.entries(query)){if(value===undefined)continue;params.set(key,String(value));}
+    const qs=params.toString();
+    return request(`/api/automation/runs${qs?`?${qs}`:''}`,workflowRunListResponseSchema,signal?{signal}:{});
+  },
+  getAutomationRun(runId:string,signal?:AbortSignal):Promise<WorkflowRunDetail>{return request(`/api/automation/runs/${runId}`,workflowRunDetailSchema,signal?{signal}:{});},
+  requestWorkflowRun(workflowKey:string,body:RequestWorkflowRunRequest = {}):Promise<WorkflowRunResponse>{return request(`/api/automation/workflows/${workflowKey}/request-run`,workflowRunResponseSchema,{method:'POST',body});},
+  cancelWorkflowRun(runId:string):Promise<WorkflowRunResponse>{return request(`/api/automation/runs/${runId}/cancel`,workflowRunResponseSchema,{method:'POST'});},
+
+  // --- Service tokens ----------------------------------------------------------
+  listServiceTokens(signal?:AbortSignal):Promise<ServiceTokenListResponse>{return request('/api/automation/service-tokens',serviceTokenListResponseSchema,signal?{signal}:{});},
+  revokeServiceToken(tokenId:string):Promise<RevokeServiceTokenResponse>{return request(`/api/automation/service-tokens/${tokenId}/revoke`,revokeServiceTokenResponseSchema,{method:'POST'});},
 };

@@ -38,6 +38,39 @@ write — scoped to a project's `.git` directory only, and only when that
 project is on a separate, empty-by-default, root-managed write-enabled list.
 See [repository-actions.md](repository-actions.md).
 
+## Service identity domain
+
+The platform's first non-human principal. `service_accounts` is a small,
+compiled-in registry (`apps/control-api/src/auth/service-accounts.ts`),
+reconciled into the database at boot; `service_tokens` are minted only by
+`pcctl create-service-token`, never by a route. A service token authenticates
+over `Authorization: Bearer`, resolved by `createResolvePrincipal` — a
+preHandler distinct from, and additive to, the cookie-only `createRequireAuth`
+every pre-existing route still uses unchanged. Only a route that explicitly
+wires the new preHandler can ever be reached by one; scope
+(`requireScope`) and principal kind (`requirePrincipalKind`) compose on top of
+it for routes that must accept both kinds of caller but still restrict a
+specific action to a human. See [service-accounts.md](service-accounts.md).
+
+## Automation domain
+
+n8n's first legitimate way to call the Control API, layered on service
+identity above it. Workflow *definitions* are a repository-owned,
+read-only-mounted manifest (`infra/n8n/workflows/manifest.json`), validated
+at boot — never a database table, never editable through a route. Workflow
+*run history* is the opposite: `workflow_runs` and append-only
+`workflow_run_steps` are the authoritative record, deliberately not trusted
+to n8n's own execution log, which this deployment prunes after 14 days. A
+manual run opens `queued` and is claimed by n8n polling
+`POST /api/automation/queue/claim` (`FOR UPDATE SKIP LOCKED`, so two
+concurrent claims can never win the same row) — because Control API cannot
+call n8n; n8n publishes no inbound HTTP surface, verified functionally
+(`N8N-001`) as well as by static lint of every shipped workflow file
+(`N8N-002`, `scripts/lib/workflow-lint.py`). A scheduled run opens directly
+into `running`. Severity → notification policy is decided server-side from
+the manifest at settle time, never by a workflow's own logic. See
+[automation.md](automation.md).
+
 ## Overview
 
 ```
@@ -324,6 +357,25 @@ row once it reaches a terminal status (`succeeded`, `failed`, `cancelled`,
 `expired`); grants deny physical deletion for `control_app`, and
 `backup_reader` remains SELECT-only. See
 [repository-actions.md](repository-actions.md).
+
+Service identity tables (migrations `0015`/`0016`): `service_accounts` and
+`service_tokens`. A trigger rejects a token whose scopes exceed its account's
+scope ceiling; a second trigger makes every identity field immutable once a
+token exists and makes revocation one-way. Grants deny physical deletion for
+`control_app` on both tables, and `backup_reader` remains SELECT-only. See
+[service-accounts.md](service-accounts.md).
+
+Automation tables (migrations `0017`/`0018`): `workflow_runs` and append-only
+`workflow_run_steps`. A partial unique index permits at most one
+`queued`/`running` row per workflow; a second partial index enforces the
+manifest's idempotency window while specifically excluding `cancelled`/
+`expired` rows, so an aborted or lapsed attempt never blocks a legitimate
+retry. A lifecycle trigger enforces the transition graph only when status
+actually changes (a same-status update, e.g. touching only a lease
+timestamp, is not a transition) and freezes a row once it reaches a terminal
+status. `control_app` cannot `DELETE` from `workflow_runs`; it cannot
+`UPDATE` `workflow_run_steps` at all. `backup_reader` remains SELECT-only on
+both. See [automation.md](automation.md).
 
 Development State adds no table or migration. Live Git metadata is not cached
 in PostgreSQL; only compact Git state is persisted inside new immutable

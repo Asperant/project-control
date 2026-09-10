@@ -7,6 +7,7 @@ import type { ErrorResponse } from '@project-control/contracts';
 
 import type { AppContext } from './context.js';
 import { AppError } from './errors.js';
+import { rateLimitKey } from './auth/rate-limit-key.js';
 import { healthRoutes } from './routes/health.js';
 import { authRoutes } from './routes/auth.js';
 import { systemRoutes } from './routes/system.js';
@@ -19,6 +20,8 @@ import { workSessionRoutes } from './routes/work-sessions.js';
 import { resumeRoutes } from './routes/resume.js';
 import { developmentRoutes } from './routes/development.js';
 import { repositoryActionRoutes } from './routes/repository-actions.js';
+import { automationRoutes } from './routes/automation.js';
+import { serviceTokenRoutes } from './routes/service-tokens.js';
 
 /**
  * Builds the Fastify instance.
@@ -98,7 +101,9 @@ export async function buildApp(ctx: AppContext) {
     // Health checks come from Docker inside the container and must never be
     // throttled, or a burst of traffic would make the container look unhealthy.
     allowList: (req) => req.url.startsWith('/health/'),
-    keyGenerator: (req) => req.ip,
+    // See auth/rate-limit-key.ts for why a Bearer caller is keyed by its
+    // token rather than its IP.
+    keyGenerator: rateLimitKey,
     // The plugin *throws* whatever this returns, so it has to be an Error with a
     // statusCode — a plain object falls through to the generic branch of the
     // error handler and is reported as a 500. Returning an AppError also routes
@@ -215,6 +220,8 @@ export async function buildApp(ctx: AppContext) {
   await app.register(developmentRoutes(ctx));
   await app.register(repositoryActionRoutes(ctx));
   await app.register(resumeRoutes(ctx));
+  await app.register(automationRoutes(ctx));
+  await app.register(serviceTokenRoutes(ctx));
 
   return app;
 }

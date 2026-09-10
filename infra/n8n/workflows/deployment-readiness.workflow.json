@@ -1,0 +1,309 @@
+{
+  "name": "Project Control \u2014 Deployment Readiness",
+  "id": "b6737774-49eb-4930-9a23-46a0251ee045",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * *"
+            }
+          ]
+        }
+      },
+      "id": "f9c5e2c8-3ebf-432b-ac5d-42be8efcc52c",
+      "name": "Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1000,
+        0
+      ],
+      "notes": "Schedule trigger, NOT a webhook. This workflow has no inbound HTTP surface."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://control-api:8080/api/automation/runs",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ workflowKey: \"deployment-readiness\", externalRef: $execution.id }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "19b32ab6-67f8-463e-ae5e-637d3a4a2bd1",
+      "name": "Open Run",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -780,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Project Control API"
+        }
+      },
+      "notes": "Opens the run directly into 'running' \u2014 this trigger already fired, so there is nothing to queue. A 409 here (idempotency window already consumed today) is expected on a re-run within the same window and should stop the workflow rather than error loudly."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://control-api:8080/api/system/status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "c010e14a-e26e-4b18-bf90-b62ec9bb9c60",
+      "name": "Read System Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -560,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Project Control API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pure logic, no network calls: derives this run's step/settle payload\n// from the system status probe. severity/notify policy for THIS severity\n// is still decided server-side by /settle \u2014 this node only classifies\n// what was observed.\nconst runId = $('Open Run').item.json.run.id;\nconst status = $json;\nconst component = (status.components || []).find((c) => c.id === 'verification');\nconst state = component ? component.status : 'unknown';\n\nlet severity = 'info';\nlet stepStatus = 'passed';\nlet settleStatus = 'completed';\nif (state === 'down') { severity = 'critical'; stepStatus = 'failed'; settleStatus = 'failed'; }\nelse if (state === 'degraded' || state === 'manual_configuration_required') { severity = 'warning'; stepStatus = 'warning'; }\n\nconst summary = component\n  ? `Daily verification: ${state} \u2014 ${component.detail}`\n  : 'Daily verification: component not reported by /api/system/status';\n\nreturn [{ json: { runId, severity, stepStatus, settleStatus, summary } }];"
+      },
+      "id": "4ef02f47-e149-490d-883e-a7759a1bdcf0",
+      "name": "Evaluate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -340,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://control-api:8080/api/automation/runs/{{ $json.runId }}/steps",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ position: 0, name: \"Daily verification\", status: $json.stepStatus, detail: { summary: $json.summary } }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "e8c4b2c8-17d6-4ab1-aa12-e12490e1f203",
+      "name": "Record Step",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -120,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Project Control API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://control-api:8080/api/automation/runs/{{ $('Evaluate').item.json.runId }}/settle",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: $('Evaluate').item.json.settleStatus, summary: $('Evaluate').item.json.summary, severity: $('Evaluate').item.json.severity }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "543fe45b-a672-4b36-9010-20df5f55a280",
+      "name": "Settle",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        100,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Project Control API"
+        }
+      },
+      "notes": "The response's `notify` field is computed server-side from this workflow's manifest entry (infra/n8n/workflows/manifest.json) and the settled severity \u2014 this workflow never decides notify itself."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "04b32e95-a6ad-44e6-9c76-379f452293a4",
+              "leftValue": "={{ $json.notify }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a472661e-93b0-444f-be63-9e8b11374b20",
+      "name": "Should Notify",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        320,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.PC_TELEGRAM_CHAT_ID }}",
+        "text": "={{ 'Project Control \u2014 Deployment Readiness: ' + $('Evaluate').item.json.summary }}",
+        "additionalFields": {
+          "disable_web_page_preview": true
+        }
+      },
+      "id": "b201d5e8-e7f6-4427-9845-09b4502e6f21",
+      "name": "Send Telegram notification",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        540,
+        0
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Project Control Telegram bot"
+        }
+      },
+      "notes": "OUTBOUND ONLY, same credential as infra/n8n/workflows/telegram-notification.example.json."
+    }
+  ],
+  "connections": {
+    "Schedule": {
+      "main": [
+        [
+          {
+            "node": "Open Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Open Run": {
+      "main": [
+        [
+          {
+            "node": "Read System Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read System Status": {
+      "main": [
+        [
+          {
+            "node": "Evaluate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate": {
+      "main": [
+        [
+          {
+            "node": "Record Step",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Step": {
+      "main": [
+        [
+          {
+            "node": "Settle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settle": {
+      "main": [
+        [
+          {
+            "node": "Should Notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Notify": {
+      "main": [
+        [
+          {
+            "node": "Send Telegram notification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": false,
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "project-control"
+    },
+    {
+      "name": "automation"
+    }
+  ],
+  "pinData": {},
+  "meta": {
+    "instanceId": "",
+    "description": "workflowKey: deployment-readiness. Import via: sudo ./pcctl install-workflows (or n8n UI -> Workflows -> Import from File). Requires the 'Project Control API' Header Auth credential and the 'Project Control Telegram bot' Telegram credential to already exist \u2014 see docs/automation.md and docs/manual-checkpoints.md."
+  }
+}

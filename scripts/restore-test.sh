@@ -179,6 +179,24 @@ log_ok "scratch database ready (in-memory, isolated, no published port)"
 # =============================================================================
 log_step "3/5  Restoring the database dumps"
 
+# What this section deliberately does NOT test: role grants. pg_dump runs
+# with --no-owner --no-privileges (see backup.sh), so the dump carries data
+# and schema (tables, constraints, indexes, triggers) only — never
+# ownership or GRANT statements, on purpose: the documented disaster-
+# recovery procedure (docs/disaster-recovery.md) provisions a fresh cluster
+# via `pcctl install` (which runs reconcile-roles-and-databases.sh, the
+# same idempotent script that provisions a first-time install) *before*
+# `pg_restore` ever runs, so the roles this dump is loaded into already have
+# the right grants by the time it lands. Re-deriving a full four-role
+# cluster inside this throwaway single-superuser sandbox just to re-prove
+# grants that are already the subject of their own dedicated checks would
+# duplicate, not strengthen, that proof. Grants are verified where they
+# actually apply: against the live, already-provisioned cluster, by
+# verify-security.sh's PGS-*/AUT-* checks (control_app cannot DELETE
+# project_actions/service_accounts/service_tokens/workflow_runs, cannot
+# UPDATE/DELETE workflow_run_steps; backup_reader stays SELECT-only
+# everywhere) — run `sudo ./pcctl verify-security` for that half of the
+# guarantee.
 restore_and_check() {
   local database="$1"; shift
   local expected_tables=("$@")
@@ -208,7 +226,7 @@ restore_and_check() {
   log_ok "${database}: all expected tables present (${#expected_tables[@]})"
 }
 
-restore_and_check project_control users sessions audit_events schema_migrations system_settings artifact_objects projects roadmap_milestones roadmap_tasks task_acceptance_criteria task_dependencies task_notes project_memory_entries project_checkpoints agent_runs agent_run_prompts agent_reports work_sessions work_session_amendments
+restore_and_check project_control users sessions audit_events schema_migrations system_settings artifact_objects projects roadmap_milestones roadmap_tasks task_acceptance_criteria task_dependencies task_notes project_memory_entries project_checkpoints agent_runs agent_run_prompts agent_reports work_sessions work_session_amendments project_actions service_accounts service_tokens workflow_runs workflow_run_steps
 
 # n8n owns its own schema, so the table list is not asserted; the check is that
 # the dump loads and contains something.
@@ -346,6 +364,120 @@ if [[ "${invalid_checkpoint_versions:-0}" == "0" ]]; then
   log_ok "project_control: checkpoint v1/v2/v3 compatibility and compact v3 Git state hold after restore"
 else
   fail "restored project_control has ${invalid_checkpoint_versions} incompatible checkpoint snapshot(s)"
+fi
+
+# Repository Actions (0013/0014): this table previously had no dedicated
+# restore-test coverage at all beyond the generic table-existence check —
+# closed here. The lifecycle CHECK constraint means pg_restore itself would
+# already refuse a dump containing a terminal row with inconsistent
+# started_at/settled_at/result_json (CHECK constraints are validated as data
+# loads), so a successful restore is already meaningful evidence; the
+# explicit query below additionally proves the *specific* invariant by name
+# rather than only trusting that a restore failure would have said why.
+project_action_constraints="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM pg_constraint WHERE conname IN ('project_actions_pkey','project_actions_project_id_fkey','project_actions_lifecycle_check')" 2>/dev/null || echo 0)"
+project_action_index="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relname='project_actions_one_open_per_project_idx' AND i.indisunique AND i.indpred IS NOT NULL" 2>/dev/null || echo 0)"
+project_action_trigger="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid WHERE t.tgenabled <> 'D' AND t.tgname='project_actions_guard_mutation' AND t.tgrelid='project_actions'::regclass AND p.proname='guard_project_action_mutation'" 2>/dev/null || echo 0)"
+if [[ "${project_action_constraints:-0}" == "3" && "${project_action_index:-0}" == "1" && "${project_action_trigger:-0}" == "1" ]]; then
+  log_ok "project_control: Repository Action ownership, lifecycle, one-open-per-project and settlement-immutability protections restored"
+else
+  fail "restored project_control is missing Repository Action protections (constraints=${project_action_constraints}/3, one-open index=${project_action_index}/1, trigger=${project_action_trigger}/1)"
+fi
+
+orphan_project_actions="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM project_actions a LEFT JOIN projects p ON p.id=a.project_id WHERE p.id IS NULL" 2>/dev/null || echo 0)"
+inconsistent_terminal_actions="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM project_actions WHERE status IN ('succeeded','failed') AND (started_at IS NULL OR settled_at IS NULL OR result_json IS NULL)" 2>/dev/null || echo 0)"
+duplicate_open_actions="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM (SELECT project_id FROM project_actions WHERE status IN ('planned','running') GROUP BY project_id HAVING count(*)>1) d" 2>/dev/null || echo 0)"
+if [[ "${orphan_project_actions:-0}" == "0" && "${inconsistent_terminal_actions:-0}" == "0" && "${duplicate_open_actions:-0}" == "0" ]]; then
+  log_ok "project_control: restored Repository Actions have no dangling project references, inconsistent terminal state, or duplicate open actions per project"
+else
+  fail "restored Repository Action integrity failed (orphan actions=${orphan_project_actions}, inconsistent terminal=${inconsistent_terminal_actions}, duplicate open per project=${duplicate_open_actions})"
+fi
+
+# Service identity (0015/0016): a token's scopes must remain a subset of its
+# account's, and revocation/identity immutability triggers must survive the
+# restore intact.
+service_identity_triggers="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid WHERE t.tgenabled <> 'D' AND ((t.tgname='service_tokens_guard_scopes' AND t.tgrelid='service_tokens'::regclass AND p.proname='guard_service_token_scopes') OR (t.tgname='service_tokens_guard_mutation' AND t.tgrelid='service_tokens'::regclass AND p.proname='guard_service_token_mutation'))" 2>/dev/null || echo 0)"
+if [[ "${service_identity_triggers:-0}" == "2" ]]; then
+  log_ok "project_control: service token scope-ceiling and immutability triggers restored"
+else
+  fail "restored project_control is missing service token protections (triggers=${service_identity_triggers}/2)"
+fi
+
+orphan_service_tokens="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM service_tokens t LEFT JOIN service_accounts a ON a.id=t.account_id WHERE a.id IS NULL" 2>/dev/null || echo 0)"
+scope_ceiling_violations="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM service_tokens t JOIN service_accounts a ON a.id=t.account_id WHERE NOT (t.scopes <@ a.scopes)" 2>/dev/null || echo 0)"
+if [[ "${orphan_service_tokens:-0}" == "0" && "${scope_ceiling_violations:-0}" == "0" ]]; then
+  log_ok "project_control: restored service tokens have no orphaned account references or scope-ceiling violations"
+else
+  fail "restored service identity integrity failed (orphan tokens=${orphan_service_tokens}, scope violations=${scope_ceiling_violations})"
+fi
+
+# The schema itself must still hold no plaintext-shaped column after a
+# restore (the same structural property SVC-001 asserts on the live
+# cluster) — a future migration accidentally reintroducing one would be
+# caught here too, not only by a fresh install. Row-level: every restored
+# token_hash must still be exactly 64 lowercase hex characters (the SHA-256
+# shape written at mint time — see auth/service-tokens.ts) and no
+# service_tokens row anywhere resembles the raw pcs_-prefixed token format.
+service_token_columns="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT string_agg(column_name, ',') FROM information_schema.columns WHERE table_name='service_tokens' AND table_schema='public'" 2>/dev/null || echo '')"
+if printf '%s' "${service_token_columns:-}" | grep -qiE '(^|,)(token|value|plaintext|secret)(,|$)'; then
+  fail "restored service_tokens has a plaintext-shaped column: ${service_token_columns}"
+else
+  log_ok "project_control: restored service_tokens schema still stores only a hash, no plaintext-shaped column"
+fi
+
+malformed_token_hashes="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM service_tokens WHERE token_hash !~ '^[0-9a-f]{64}\$' OR token_hash ~ '^pcs_'" 2>/dev/null || echo 0)"
+if [[ "${malformed_token_hashes:-0}" == "0" ]]; then
+  log_ok "project_control: every restored service_tokens.token_hash is a well-formed SHA-256 digest, never a raw token"
+else
+  fail "restored service_tokens has ${malformed_token_hashes} row(s) whose token_hash is not a valid SHA-256 digest (possible plaintext leak)"
+fi
+
+# Automation (0017/0018): the lifecycle trigger and both partial unique
+# indexes (one-open-per-workflow, idempotency-window-excluding-cancelled/
+# expired) must survive the restore intact.
+automation_triggers="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid WHERE t.tgenabled <> 'D' AND t.tgname='workflow_runs_guard_mutation' AND t.tgrelid='workflow_runs'::regclass AND p.proname='guard_workflow_run_mutation'" 2>/dev/null || echo 0)"
+automation_indexes="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relname IN ('workflow_runs_one_open_idx','workflow_runs_idempotency_idx') AND i.indisunique AND i.indpred IS NOT NULL" 2>/dev/null || echo 0)"
+if [[ "${automation_triggers:-0}" == "1" && "${automation_indexes:-0}" == "2" ]]; then
+  log_ok "project_control: workflow run lifecycle trigger and partial unique indexes restored"
+else
+  fail "restored project_control is missing automation protections (trigger=${automation_triggers}/1, indexes=${automation_indexes}/2)"
+fi
+
+orphan_workflow_steps="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM workflow_run_steps s LEFT JOIN workflow_runs r ON r.id=s.run_id WHERE r.id IS NULL" 2>/dev/null || echo 0)"
+cross_project_runs="$(docker exec -i -e PGPASSWORD="$SCRATCH_PASSWORD" "$SCRATCH_CONTAINER" \
+  psql -U postgres -d project_control -tAc \
+  "SELECT count(*) FROM workflow_runs r LEFT JOIN projects p ON p.id=r.project_id WHERE r.project_id IS NOT NULL AND p.id IS NULL" 2>/dev/null || echo 0)"
+if [[ "${orphan_workflow_steps:-0}" == "0" && "${cross_project_runs:-0}" == "0" ]]; then
+  log_ok "project_control: restored workflow runs have no orphaned steps or dangling project references"
+else
+  fail "restored automation integrity failed (orphan steps=${orphan_workflow_steps}, dangling project refs=${cross_project_runs})"
 fi
 
 # =============================================================================

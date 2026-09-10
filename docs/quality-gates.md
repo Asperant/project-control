@@ -39,6 +39,29 @@ for test_script in tests/*.sh; do bash "$test_script" || exit 1; done
 - approximately 390px mobile rendering, long-text wrapping, paginated history,
   explicit empty/error states and archived read-only behavior.
 
+Automation / service identity changes additionally require:
+
+```bash
+bash tests/workflow-lint-regression.sh
+bash tests/verification-status-merge-regression.sh
+python3 scripts/lib/workflow-lint.py infra/n8n/workflows/manifest.json infra/n8n/workflows/*.workflow.json
+```
+
+- mixed cookie+Bearer credentials rejected; a Bearer header is ignored
+  (not merely denied) on every route that has not opted into
+  `resolvePrincipal`;
+- revoked/expired/disabled-account tokens rejected indistinguishably, each
+  audited;
+- a token's scopes can never exceed its account's ceiling (database
+  trigger, not just application code); `requirePrincipalKind`/`requireScope`
+  deny a service principal and are a no-op for a user principal;
+- idempotency window collision including the cancelled/expired exclusion;
+  concurrent-claim exclusivity (`FOR UPDATE SKIP LOCKED`); lazy lease
+  expiry; severity → notify computed server-side from the manifest;
+- every shipped workflow file passes the static lint; the linter itself
+  rejects a webhook, a non-control-api HTTP target, `require(...)`, an
+  embedded token and an unlisted `$env` read.
+
 Deployment/readiness changes additionally require:
 
 ```bash

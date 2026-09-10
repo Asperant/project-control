@@ -246,10 +246,19 @@ describe.skipIf(!hasDocker)('artifacts, roles and health', () => {
 
       expect(ids).toEqual(
         expect.arrayContaining([
-          'postgres', 'n8n', 'artifact_store', 'runner', 'backup', 'tailscale',
+          'postgres', 'n8n', 'artifact_store', 'runner', 'backup', 'tailscale', 'verification',
         ]),
       );
       expect(body.components.find((c: { id: string }) => c.id === 'postgres').status).toBe('ok');
+    });
+
+    it('reports missing verification status as manual_configuration_required', async () => {
+      const { token } = await authenticate();
+      const response = await harness.app.inject({
+        method: 'GET', url: '/api/system/status', cookies: { pc_session: token },
+      });
+      const verification = response.json().components.find((c: { id: string }) => c.id === 'verification');
+      expect(verification.status).toBe('manual_configuration_required');
     });
 
     it('reports an unreachable runner as down rather than erroring', async () => {

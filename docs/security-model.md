@@ -23,6 +23,7 @@ command you can run.
 | Path traversal in artifacts | Paths derived from validated digests only |
 | Log/backup secret leakage | Structured redaction in API, runner and shell layers |
 | Audit tampering | No UPDATE/DELETE grant on `audit_events` |
+| Stolen or leaked service token | Scoped, TTL-bound, revocable, hashed at rest; cannot execute/apply/archive regardless of what scope it carries |
 
 ### Out of scope for Stage 1
 
@@ -480,6 +481,113 @@ PostgreSQL privilege level).
 
 ---
 
+## 13. Service identity
+
+**Claim: a machine caller (n8n, in the first consumer) authenticates with a
+scoped, revocable, TTL-bound Bearer token that cannot execute, apply, archive
+or delete anything — and every route that has not explicitly opted into
+accepting one rejects it exactly as if it were absent.**
+
+Full design in [service-accounts.md](service-accounts.md); this section is
+the security summary.
+
+This is the platform's first non-human principal. Two properties keep it from
+becoming a second, weaker authentication system living alongside sessions:
+
+**Closed by default, per route.** `createRequireAuth` — the preHandler every
+route used before this feature, and still the preHandler every route except
+`/api/automation/*` uses — never reads the `Authorization` header at all. A
+Bearer token presented to any of those routes is not rejected by a check; it
+is never looked at, which is a stronger guarantee than a check that could be
+forgotten on a new route. Only a route that explicitly wires
+`resolvePrincipal` instead can ever be reached by a service token, and
+`requirePrincipalKind('user')` is available for the case where that same route
+must still refuse a machine caller for a specific action.
+
+**Propose, never confirm.** The scope vocabulary
+(`automation:run`, `project:read`, `project:rescan`, `action:plan`,
+`system:read`, `report:write`) has no member that mutates a project's
+repository, roadmap, or registration state, applies a diff, or archives
+anything. `action:plan` reaches only as far as producing a Repository Action
+preview (`docs/repository-actions.md`); executing it is
+`requirePrincipalKind('user')`-gated regardless of scope. A compromised or
+leaked service token can read and suggest; it cannot act.
+
+**Minted like the first administrator, not like a session.** There is no
+route that creates a service token — only `sudo ./pcctl create-service-token`,
+run at a host terminal, against a compiled-in account registry
+(`apps/control-api/src/auth/service-accounts.ts`) that only a code change can
+extend. The plaintext is printed once and stored nowhere; only its SHA-256 is
+persisted, so a `backup_reader` dump that reaches Google Drive contains
+nothing replayable — the same property sessions already have. Every token
+carries a mandatory expiry (no unexpiring machine credential) and can be
+revoked from the panel or `pcctl` in one step; a settled revocation is
+immutable at the database trigger level, the same guard `project_actions` and
+`work_sessions` use for their own terminal states.
+
+*Verified by:* `SVC-001` (no plaintext-shaped column exists on
+`service_tokens`), `SVC-002` (scope-ceiling and immutability triggers exist,
+are enabled and RAISE EXCEPTION-guarded), `SVC-003` (functional: a cookie-only
+route returns the identical `401` to a Bearer header as it does to no
+credential at all), `SVC-006` (the scope vocabulary is closed by a database
+CHECK constraint, not only a TypeScript enum), `PGS-020`/`PGS-021`
+(append-only `service_tokens`, read-only `service_accounts` for
+`backup_reader`, at the PostgreSQL privilege level). Live behavior — mixed
+credential rejection, revoked/expired/disabled-account rejection, scope and
+principal-kind denial, audit coverage — is proven by
+`apps/control-api/test/integration/service-tokens.test.ts` against a real
+database, the same split `PGS-012`/`PGS-016`/`PGS-019` already use for
+trigger *existence* here versus trigger *behavior* in the integration suite.
+
+---
+
+## 14. Automation
+
+**Claim: n8n has no inbound HTTP surface, and a workflow run can only ever
+read platform state and record its own outcome — never confirm a mutation,
+never widen what it can reach beyond the manifest's own fixed scope
+requirement.**
+
+Full design in [automation.md](automation.md); this section is the security
+summary.
+
+n8n calling the Control API (rather than the reverse) is what keeps this
+feature from needing a webhook: a manual run is claimed by n8n *polling*
+`POST /api/automation/queue/claim` on its own schedule, never pushed to it.
+Building this feature surfaced one real, previously undetected gap in the
+existing deployment — `N8N_COMMUNITY_PACKAGES_ENABLED` had no explicit
+value and defaulted to enabled, which would let anyone with n8n UI access
+(already Tailscale- and owner-account-gated, but this platform's design
+otherwise refuses to lean on that boundary alone) install an arbitrary
+third-party node this platform's own review never sees. It is now pinned to
+`"false"` and asserted live by `N8N-004`.
+
+Workflow *definitions* follow the runner's own pattern: a compiled,
+repository-owned, read-only-mounted manifest, not a database row a route
+could create. Workflow *run history* is append-only and immutable once
+settled, the same trigger-enforced discipline `project_actions` and
+`work_sessions` already established, and is treated as authoritative
+precisely because n8n's own execution log is not — this deployment prunes it
+after 14 days.
+
+*Verified by:* `N8N-001` (functional: no webhook is registered — a random
+path returns 404), `N8N-002` (static: every shipped workflow file passes
+`workflow-lint.py`, which rejects a webhook/executeCommand/ssh node, any
+HTTP Request node not targeting `control-api:8080`, an embedded service
+token, and any `$env` read outside the one allowed Telegram chat id —
+`tests/workflow-lint-regression.sh` proves the linter itself catches each of
+those shapes), `N8N-003` (functional: n8n can reach the Control API — the
+positive complement to `PGS-006`'s existing proof that `n8n_app` cannot
+reach `project_control`), `N8N-004` (functional: community packages
+disabled), `AUT-001`/`AUT-002` (append-only run history at the PostgreSQL
+privilege level). Idempotency-window correctness (including the
+cancelled/expired exclusion), concurrent-claim exclusivity, lazy lease
+expiry and the severity → notify decision are proven by
+`apps/control-api/test/integration/automation.test.ts` against a real
+database.
+
+---
+
 ## What this design deliberately does not do
 
 - No public webhook or management port.
@@ -492,5 +600,13 @@ PostgreSQL privilege level).
   merge, rebase, stash) — Repository Actions supports a confirmed `git.commit`
   only. See [repository-actions.md](repository-actions.md#scope) and the risk
   registry for why push specifically is a distinct future effort.
+- No panel route that mints a service token — only `pcctl`, at a host
+  terminal. No unexpiring service token. No scope that can execute, apply,
+  archive or delete. No route that creates a `service_accounts` row outside
+  the compiled-in registry. See [service-accounts.md](service-accounts.md).
+- No webhook, anywhere, in any workflow — enforced statically as well as
+  documented. No route that creates or edits a workflow manifest entry. No
+  workflow that reaches `action:plan` or applies a rescan diff in this
+  version. See [automation.md](automation.md).
 - No automatic deploy, and no automatic commit either — every Repository
   Action requires an explicit, previewed confirmation.

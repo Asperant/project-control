@@ -9,6 +9,9 @@ import pg from 'pg';
 import { buildApp } from '../../src/app.js';
 import { AuditLog } from '../../src/audit.js';
 import { SessionStore } from '../../src/auth/session-store.js';
+import { ServiceTokenStore } from '../../src/auth/service-token-store.js';
+import { AutomationStore } from '../../src/automation/store.js';
+import { loadManifest } from '../../src/automation/manifest.js';
 import { loadConfig, type AppConfig } from '../../src/config.js';
 import { createPool } from '../../src/db/pool.js';
 import { runMigrations } from '../../src/db/migrate.js';
@@ -208,9 +211,15 @@ export async function createHarness(options: CreateHarnessOptions = {}): Promise
       PC_N8N_HEALTH_URL: 'http://127.0.0.1:1/healthz',
       PC_TAILSCALE_STATUS_FILE: path.join(secretsDir, 'no-tailscale.json'),
       PC_BACKUP_STATUS_FILE: path.join(secretsDir, 'no-backup.json'),
+      // Points at the real, repository-owned manifest rather than a synthetic
+      // fixture: this doubles as a standing check that the shipped manifest
+      // is itself valid, the same way runMigrations above runs the real
+      // migration files rather than a trimmed test set.
+      PC_AUTOMATION_MANIFEST_FILE: path.resolve(import.meta.dirname, '../../../../infra/n8n/workflows/manifest.json'),
     } as NodeJS.ProcessEnv);
 
     const logger = createLogger(process.env['PC_TEST_LOG_LEVEL'] ?? 'fatal', 'test');
+    const automationManifest = loadManifest(config.automation.manifestFile);
     const db = createPool(config);
     const artifactStore = new FilesystemArtifactStore({
       root: config.artifacts.root,
@@ -224,6 +233,9 @@ export async function createHarness(options: CreateHarnessOptions = {}): Promise
       logger,
       audit: new AuditLog(db, logger),
       sessions: new SessionStore(db, config),
+      serviceTokens: new ServiceTokenStore(db),
+      automation: new AutomationStore(db, automationManifest),
+      automationManifest,
       artifactStore,
       runner: new RunnerClient({
         socketPath: config.runner.socketPath,

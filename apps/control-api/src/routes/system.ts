@@ -7,7 +7,7 @@ import type {
 } from '@project-control/contracts';
 
 import type { AppContext } from '../context.js';
-import { createRequireAuth } from '../auth/middleware.js';
+import { createResolvePrincipal, requireScope } from '../auth/middleware.js';
 
 /**
  * `GET /api/system/status` — the dashboard payload.
@@ -57,19 +57,29 @@ const report = (
 export const systemRoutes =
   (ctx: AppContext): FastifyPluginAsync =>
   async (app) => {
-    const requireAuth = createRequireAuth(ctx);
+    // Dashboard callers (a human's session cookie) and the System Health
+    // automation workflow (a service token scoped `system:read`) both read
+    // this same payload — `requireScope` is a no-op for a human principal
+    // (docs/service-accounts.md), so this one preHandler pair serves both
+    // without a second, parallel route. Discovered missing during the Stage
+    // 9 live acceptance run: the shipped workflow's "Read System Status" node
+    // was rejected outright by the human-only `createRequireAuth` this route
+    // used before, since it never even inspects a Bearer header.
+    const resolvePrincipal = createResolvePrincipal(ctx);
+    const requireStatusReader = [resolvePrincipal, requireScope(ctx, 'system:read')];
 
-    app.get('/api/system/status', { preHandler: requireAuth }, async (request, reply) => {
-      const [postgres, n8n, artifacts, runner, backup, tailscale] = await Promise.all([
+    app.get('/api/system/status', { preHandler: requireStatusReader }, async (request, reply) => {
+      const [postgres, n8n, artifacts, runner, backup, tailscale, verification] = await Promise.all([
         probePostgres(ctx),
         probeN8n(ctx),
         probeArtifacts(ctx),
         probeRunner(ctx),
         probeBackup(ctx),
         probeTailscale(ctx),
+        probeVerification(ctx),
       ]);
 
-      const components = [postgres, n8n, artifacts, runner, backup, tailscale];
+      const components = [postgres, n8n, artifacts, runner, backup, tailscale, verification];
 
       // Roll-up: any `down` makes the system down; anything not `ok` degrades it.
       // `manual_configuration_required` is treated as degraded, not down — the
@@ -276,6 +286,48 @@ async function probeTailscale(ctx: AppContext): Promise<ComponentReport> {
   } catch {
     return report('tailscale', 'Tailscale', 'manual_configuration_required',
       'No Tailscale status file yet. Run ./pcctl configure-tailscale.');
+  }
+}
+
+/**
+ * Reads the daily verify/verify-security summary that
+ * scripts/record-verification-status.sh writes on a systemd timer. The API
+ * never runs the checks itself — several of them (nsenter probes, host
+ * filesystem inspection) require root and are structurally host-only, the
+ * same reason backup and Tailscale status are file-read probes too.
+ */
+async function probeVerification(ctx: AppContext): Promise<ComponentReport> {
+  try {
+    const raw = await readFile(ctx.config.components.verificationStatusFile, 'utf8');
+    const parsed = JSON.parse(raw) as {
+      generatedAt?: string;
+      overall?: 'pass' | 'fail';
+      verify?: { overall?: string; summary?: { pass?: number; fail?: number; warn?: number } };
+      verifySecurity?: { overall?: string; summary?: { pass?: number; fail?: number; warn?: number } };
+    };
+
+    const ageHours = parsed.generatedAt
+      ? (Date.now() - new Date(parsed.generatedAt).getTime()) / 3_600_000
+      : Number.POSITIVE_INFINITY;
+
+    const failCount = (parsed.verify?.summary?.fail ?? 0) + (parsed.verifySecurity?.summary?.fail ?? 0);
+    const warnCount = (parsed.verify?.summary?.warn ?? 0) + (parsed.verifySecurity?.summary?.warn ?? 0);
+    const detail = `verify: ${parsed.verify?.overall ?? 'unknown'}, verify-security: ${parsed.verifySecurity?.overall ?? 'unknown'} (${failCount} failing, ${warnCount} warning)`;
+
+    if (parsed.overall === 'fail' || failCount > 0) {
+      return report('verification', 'Daily Verification', 'down', detail);
+    }
+    if (ageHours > 36) {
+      return report('verification', 'Daily Verification', 'degraded', `${detail}. Last run ${Math.round(ageHours)} h ago.`);
+    }
+    return report('verification', 'Daily Verification', 'ok', detail);
+  } catch {
+    return report(
+      'verification',
+      'Daily Verification',
+      'manual_configuration_required',
+      'No verification status file yet. It is written by the daily project-control-verify.timer.',
+    );
   }
 }
 

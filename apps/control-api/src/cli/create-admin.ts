@@ -1,10 +1,10 @@
 import { createInterface } from 'node:readline';
-import { readFileSync } from 'node:fs';
 import { stdin, stdout } from 'node:process';
 import pg from 'pg';
 import { z } from 'zod';
 
 import { hashPassword, validatePasswordStrength } from '../auth/password.js';
+import { readSecretFile } from '../secrets.js';
 
 /**
  * Interactive bootstrap of the first administrator.
@@ -58,10 +58,6 @@ function prompt(question: string, options: { silent?: boolean } = {}): Promise<s
   });
 }
 
-function readSecretFile(path: string): string {
-  return readFileSync(path, 'utf8').replace(/\r?\n$/, '');
-}
-
 async function main(): Promise<void> {
   const host = process.env['PC_PG_HOST'] ?? '127.0.0.1';
   const port = Number(process.env['PC_PG_PORT'] ?? 5432);
@@ -99,7 +95,7 @@ async function main(): Promise<void> {
     port,
     database,
     user,
-    password: readSecretFile(passwordFile),
+    password: readSecretFile(passwordFile, 'migrator password'),
     application_name: 'control-api-create-admin',
   });
 

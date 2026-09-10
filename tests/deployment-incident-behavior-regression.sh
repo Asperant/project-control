@@ -12,7 +12,7 @@ pass() { printf 'PASS: %s\n' "$1"; }
 
 write_release_files() {
   local root="$1"
-  mkdir -p "$root/infra" "$root/infra/compose" "$root/infra/caddy" "$root/config" "$root/apps/runner/bin" "$root/migrations"
+  mkdir -p "$root/infra" "$root/infra/compose" "$root/infra/caddy" "$root/infra/n8n/workflows" "$root/config" "$root/apps/runner/bin" "$root/migrations"
   cat >"$root/infra/versions.lock.env" <<'EOF'
 PC_POSTGRES_IMAGE=postgres@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 PC_N8N_IMAGE=n8n@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
@@ -24,6 +24,12 @@ PC_STACK_VERSION=test
 EOF
   : >"$root/infra/compose/compose.yaml"
   : >"$root/infra/caddy/Caddyfile"
+  # update.sh provisions the automation manifest unconditionally (see its
+  # own comment on why: control-api's boot-time manifest load fails closed
+  # on a missing file, same as an invalid one) — a synthetic release tree
+  # without one would make install_file's own missing-source check fail,
+  # not the thing this test is actually exercising.
+  printf '{"version":1,"workflows":[]}' >"$root/infra/n8n/workflows/manifest.json"
   printf '3\n' >"$root/config/checkpoint-reader-max-version"
   printf 'new runner\n' >"$root/apps/runner/bin/project-control-runner"
   chmod +x "$root/apps/runner/bin/project-control-runner"
@@ -73,6 +79,7 @@ setup_update_fixture() {
   mkdir -p "$USRC/scripts/lib" "$UDEPLOY/config/caddy" "$UDEPLOY/compose" "$UDEPLOY/runner/bin" "$UDEPLOY/secrets" "$UDEPLOY/backups" "$UBIN" "${UF}/runtime"
   cp "${REPO_ROOT}/scripts/update.sh" "$USRC/scripts/update.sh"
   cp "${REPO_ROOT}/scripts/lib/common.sh" "$USRC/scripts/lib/common.sh"
+  cp "${REPO_ROOT}/scripts/lib/assert-config-mount.py" "$USRC/scripts/lib/assert-config-mount.py"
   sed -i "s|^PC_RUNTIME_DIR=.*|PC_RUNTIME_DIR=\"${UF}/runtime\"|" "$USRC/scripts/lib/common.sh"
   sed -i 's/local timeout="${1:-30}"/local timeout="${1:-1}"/' "$USRC/scripts/lib/common.sh"
   printf '\nrunner_binary_matches_live_process() { return 0; }\n' >>"$USRC/scripts/lib/common.sh"
@@ -149,6 +156,15 @@ fi
 if [[ "${1:-}" == inspect && "${2:-}" == --format ]]; then
   [[ "$3" == '{{.Image}}' ]] && { image_for_service "${4#cid-}"; exit 0; }
   printf 'healthy\n'; exit 0
+fi
+# `compose ... config --format json`: this fixture's own compose.yaml is an
+# empty placeholder (see write_release_files), so a real `docker compose
+# config` against it would fail regardless of the mount-staging-order fix
+# this fake exists alongside — none of this test's scenarios are about that
+# bug, so a fixed, safe control-api volume list is exactly the "no opinion,
+# stay out of the way" response this fixture needs here.
+if [[ "${1:-}" == compose ]]; then
+  for arg in "$@"; do [[ "$arg" == config ]] && { printf '{"services":{"control-api":{"volumes":[{"type":"bind","target":"/config","read_only":true}]}}}'; exit 0; }; done
 fi
 if [[ "${1:-}" == image && "${2:-}" == inspect && "${3:-}" == --format ]]; then
   case "$5" in

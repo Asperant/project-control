@@ -64,7 +64,12 @@ export type AuditEventType =
   | 'agentprompt.updated'
   | 'agentreport.created' | 'agentreport.updated' | 'agentreport.finalized'
   | 'agentreport.revision_started' | 'agentreport.superseded'
-  | 'agentvalidation.updated';
+  | 'agentvalidation.updated'
+  | 'service.token_created' | 'service.token_revoked' | 'service.token_rejected'
+  | 'service.scope_denied' | 'service.principal_kind_denied'
+  | 'workflow.run_requested' | 'workflow.run_opened' | 'workflow.run_claimed'
+  | 'workflow.run_step_recorded' | 'workflow.run_artifact_attached'
+  | 'workflow.run_settled' | 'workflow.run_cancelled' | 'workflow.run_rejected';
 
 export type AuditEntry = {
   eventType: AuditEventType;

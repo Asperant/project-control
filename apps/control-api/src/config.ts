@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
 import { z } from 'zod';
+import { readSecretFile } from './secrets.js';
 
 /**
  * Configuration loading.
@@ -16,24 +16,6 @@ import { z } from 'zod';
  *     if anything is missing or malformed. A half-configured API that starts and
  *     fails later is worse than one that never starts.
  */
-
-/** Reads a secret from a file, trimming the trailing newline `printf`/editors add. */
-function readSecretFile(path: string, label: string): string {
-  let raw: string;
-  try {
-    raw = readFileSync(path, 'utf8');
-  } catch (cause) {
-    throw new Error(
-      `Unable to read ${label} from ${path}. Ensure the secret exists and is readable by this process.`,
-      { cause },
-    );
-  }
-  const value = raw.replace(/\r?\n$/, '');
-  if (value.length === 0) {
-    throw new Error(`${label} at ${path} is empty.`);
-  }
-  return value;
-}
 
 const booleanish = z
   .string()
@@ -97,6 +79,10 @@ const envSchema = z.object({
   PC_N8N_HEALTH_URL: z.string().default('http://n8n:5678/healthz'),
   PC_TAILSCALE_STATUS_FILE: z.string().default('/config/tailscale-status.json'),
   PC_BACKUP_STATUS_FILE: z.string().default('/config/backup-status.json'),
+  PC_VERIFICATION_STATUS_FILE: z.string().default('/config/verification.json'),
+
+  // --- Automation -----------------------------------------------------------
+  PC_AUTOMATION_MANIFEST_FILE: z.string().default('/config/automation/manifest.json'),
 });
 
 export type AppConfig = Readonly<{
@@ -128,7 +114,13 @@ export type AppConfig = Readonly<{
   artifacts: { root: string; maxBytes: number };
   runner: { socketPath: string; timeoutMs: number };
   logLevel: string;
-  components: { n8nHealthUrl: string; tailscaleStatusFile: string; backupStatusFile: string };
+  components: {
+    n8nHealthUrl: string;
+    tailscaleStatusFile: string;
+    backupStatusFile: string;
+    verificationStatusFile: string;
+  };
+  automation: { manifestFile: string };
 }>;
 
 export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -183,6 +175,8 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
       n8nHealthUrl: e.PC_N8N_HEALTH_URL,
       tailscaleStatusFile: e.PC_TAILSCALE_STATUS_FILE,
       backupStatusFile: e.PC_BACKUP_STATUS_FILE,
+      verificationStatusFile: e.PC_VERIFICATION_STATUS_FILE,
     },
+    automation: { manifestFile: e.PC_AUTOMATION_MANIFEST_FILE },
   });
 }

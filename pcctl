@@ -51,6 +51,14 @@ REPOSITORY ACTIONS
   enable-repo-writes <path>   Opt one registered project's .git into commit access.
   disable-repo-writes <path>  Revoke it. See docs/repository-actions.md.
 
+SERVICE TOKENS
+  create-service-token <key> [--ttl-days N]  Mint a scoped machine credential.
+  list-service-tokens                        List every minted token.
+  revoke-service-token <id>                  Revoke one. See docs/service-accounts.md.
+
+AUTOMATION
+  install-workflows       Import the shipped n8n workflows (checkpoint 5b, optional).
+
 VERIFICATION
   verify [--json]        Full functional verification.
   verify-security [--json]  Security posture verification.
@@ -60,6 +68,14 @@ MAINTENANCE
   rollback               Return to the previous version lock and images.
   reconcile-state        Repair deployment metadata to match an already
                          running, verified-coherent stack. Deploys nothing.
+  recover-deployment     Forward-repair locally-built service(s) stuck in
+                         Docker's 'created' state after a failed update, when
+                         NOTHING is pending (schema already caught up).
+                         Never touches postgres/n8n. See docs/update-rollback.md.
+  resume-update          Complete an update interrupted before its pending
+                         migration(s) were ever applied, when locally-built
+                         service(s) are stuck 'created'. Never touches
+                         postgres/n8n. See docs/update-rollback.md.
   uninstall              Remove the stack. Data is KEPT unless --delete-data.
 
 ENVIRONMENT
@@ -114,6 +130,12 @@ case "$command" in
   disable-repo-writes)    require_root_for disable-repo-writes
                           run_script repo-writes.sh disable "$@" ;;
 
+  create-service-token)   run_script service-tokens.sh create "$@" ;;
+  list-service-tokens)    run_script service-tokens.sh list "$@" ;;
+  revoke-service-token)   run_script service-tokens.sh revoke "$@" ;;
+
+  install-workflows)      run_script install-workflows.sh "$@" ;;
+
   verify)                 run_script verify.sh "$@" ;;
   verify-security)        run_script verify-security.sh "$@" ;;
 
@@ -123,6 +145,10 @@ case "$command" in
                           run_script rollback.sh "$@" ;;
   reconcile-state)        require_root_for reconcile-state
                           run_script reconcile-state.sh "$@" ;;
+  recover-deployment)     require_root_for recover-deployment
+                          run_script recover-deployment.sh "$@" ;;
+  resume-update)          require_root_for resume-update
+                          run_script resume-update.sh "$@" ;;
   uninstall)              require_root_for uninstall
                           run_script uninstall.sh "$@" ;;
 

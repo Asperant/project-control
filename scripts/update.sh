@@ -5,10 +5,17 @@
 # Sequence:
 #   1. Back up (refuse to continue if the backup fails).
 #   2. Snapshot the current version lock and the running image ids.
-#   3. Verify every new image digest resolves.
-#   4. Migration dry-run — run the SQL for real, then roll it back.
+#   3. Verify every new image digest resolves, rebuild local images, THEN
+#      stage the new compose file and automation config onto the deployment
+#      root and verify the resolved compose model is safe — all before the
+#      dry-run below, which reads the deployment root's compose file, not
+#      the repository's. Staging late here was a real, live-reproduced bug:
+#      see the comment above "Staging updated deployment configuration".
+#   4. Migration dry-run — run the SQL for real, then roll it back. Uses
+#      `compose run --no-deps`, a disposable one-off container; no running
+#      application container is touched by this step.
 #   5. Refuse to proceed if any pending migration is irreversible.
-#   6. Recreate the stack.
+#   6. Recreate the stack (compose.yaml/config were already staged in 3).
 #   7. Health gate.
 #   8. On failure, roll back automatically.
 # =============================================================================
@@ -158,6 +165,51 @@ log_ok "all pinned images resolved and present"
 log_step "Rebuilding local images"
 bash "${PC_SCRIPTS_DIR}/build.sh" || die "image build failed; nothing was changed"
 
+log_step "Staging updated deployment configuration"
+# -----------------------------------------------------------------------------
+# The migration dry-run immediately below runs `compose run ...`, and
+# compose() (lib/common.sh) reads ${PC_ROOT}/compose/compose.yaml — the
+# DEPLOYED copy, not the repository's. Staging the new compose file (and the
+# automation config it now sources /config from through a single mount —
+# see infra/compose/compose.yaml's own comment on why that mount must stay
+# singular) here, before the dry-run, is what makes the dry-run exercise the
+# SAME compose model the real deployment is about to use.
+#
+# Running the dry-run against a stale deployed compose file is the exact bug
+# that broke this update twice on the live host: fixing the repository's
+# compose.yaml alone was not enough while this staging step still happened
+# afterward, in "6/8 Applying the update" — so the dry-run kept reading the
+# old, nested-mount compose file and failed at container *creation*, before
+# `dist/cli/migrate.js` ever ran.
+#
+# This does not touch any running container. `compose run --no-deps` below
+# creates a new, disposable one-off container from this staged file; the
+# currently-running application containers are only ever replaced later, by
+# `compose up` in "6/8 Applying the update", after both the dry-run and the
+# irreversible-migration check have passed.
+install_file "${PC_REPO_ROOT}/infra/compose/compose.yaml" "${PC_ROOT}/compose/compose.yaml" 0644
+ensure_dir "${PC_ROOT}/config/status/automation" 0755 root root
+ensure_dir "${PC_ROOT}/config/status/automation/workflows" 0755 root root
+install_file "${PC_REPO_ROOT}/infra/n8n/workflows/manifest.json" \
+             "${PC_ROOT}/config/status/automation/manifest.json" 0644
+if compgen -G "${PC_REPO_ROOT}/infra/n8n/workflows/*.workflow.json" >/dev/null; then
+  for workflow_file in "${PC_REPO_ROOT}"/infra/n8n/workflows/*.workflow.json; do
+    install_file "$workflow_file" "${PC_ROOT}/config/status/automation/workflows/$(basename "$workflow_file")" 0644
+  done
+fi
+
+# Deterministic check against the REAL resolved compose model — `docker
+# compose config`, not a grep of the YAML source — so this catches the
+# actual shape `compose run`/`compose up` would see, including anything
+# --env-file interpolation or compose's own merge rules would change.
+# Asserts the general failure class (no mount nested inside another on this
+# service), not just this one incident's specific /config/automation path.
+if ! compose config --format json 2>/dev/null \
+     | python3 "${PC_SCRIPTS_DIR}/lib/assert-config-mount.py" control-api /config; then
+  die "staged compose model has an unsafe control-api mount (nested under /config, or not exactly one /config mount); refusing to run the migration dry-run against it"
+fi
+log_ok "staged compose/config verified: control-api has exactly one /config mount, none nested"
+
 # =============================================================================
 log_step "4/8  Migration dry-run"
 # =============================================================================
@@ -234,7 +286,11 @@ rollback_or_require_restore() {
 log_step "6/8  Applying the update"
 # =============================================================================
 install_file "${PC_REPO_ROOT}/infra/versions.lock.env" "${PC_ROOT}/config/versions.lock.env" 0644
-install_file "${PC_REPO_ROOT}/infra/compose/compose.yaml" "${PC_ROOT}/compose/compose.yaml" 0644
+# compose.yaml and the automation manifest/workflow registry were already
+# staged above, in "Staging updated deployment configuration" — before the
+# migration dry-run, which needs them current. install_file is idempotent
+# (copies only when content differs), so nothing here needs to re-stage
+# them; re-listing them would just be a confusing, redundant no-op.
 install_file "${PC_REPO_ROOT}/infra/caddy/Caddyfile" "${PC_ROOT}/config/caddy/Caddyfile" 0644
 install_file "${PC_REPO_ROOT}/config/checkpoint-reader-max-version" "${PC_ROOT}/config/checkpoint-reader-max-version" 0644
 for migration in "${PC_REPO_ROOT}"/migrations/*.sql; do

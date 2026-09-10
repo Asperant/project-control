@@ -55,6 +55,66 @@ Critical Resume / Work Session scenarios:
 - Development and Resume survive unavailable Git. Checkpoint v3 capture failure
   does not block normal checkpoint or atomic Work Session close.
 
+## Service identity
+
+- A service token authenticates over Bearer on `/api/automation/whoami`; a
+  session cookie authenticates identically through the same preHandler.
+- A request carrying both a cookie and a Bearer header is rejected outright
+  and audited; a route using only `requireAuth` ignores a Bearer header
+  entirely (same 401 as anonymous).
+- Unknown, revoked, expired, and disabled-account tokens are all rejected,
+  indistinguishably from each other, and each is audited.
+- `requirePrincipalKind` denies a service principal and audits it; it is
+  transparent to a user principal.
+- `requireScope` denies a service principal missing a required scope and
+  audits it; it is a no-op for a user principal regardless of the scopes
+  listed.
+- A token's scopes can never exceed its account's scope ceiling (database
+  trigger, not just application code); an unknown scope value is rejected
+  outright by a CHECK constraint.
+- A token's identity fields are immutable after creation; a revoked token can
+  never be un-revoked; revoking an already-revoked token is idempotent and
+  audited only once.
+- Re-running the compiled-in account registry reconciliation never re-enables
+  an operator-disabled account.
+- The service-token admin routes (list, revoke) are reachable by an admin
+  session only — denied to a viewer session and to a service token entirely
+  — and never expose the token value; revoke requires CSRF.
+
+## Automation
+
+- A manual run opens `queued`; a scheduled run opens directly into
+  `running`; both are rejected for an unknown workflow key, audited.
+- Exactly one `queued`/`running` run exists per workflow at a time,
+  regardless of trigger kind; a second manual request and a second
+  scheduled open are both rejected while the first is still open.
+- A second run inside the same idempotency window is rejected even after
+  the first has settled to `completed`/`failed`/`waiting_for_approval`; a
+  `cancelled` or `expired` run does **not** consume the window, so a retry
+  after either succeeds.
+- Two concurrent claims on one queued run never both win; the loser gets
+  `204`, never a duplicate `running` row.
+- A step can only be recorded against a `running` run; a duplicate step
+  position is rejected; steps are visible in run detail in position order.
+- An artefact attachment requires `report:write` specifically, not
+  `automation:run` alone, and only succeeds against a `running` run.
+- Settle computes `notify` from the workflow's manifest severity policy,
+  never from the workflow's own request; a second settle on an
+  already-settled run is rejected.
+- A run whose lease has lapsed becomes `expired` lazily on the next read or
+  touch — not before, and with no background sweeper — and a settle
+  attempt against an already-expired run is rejected.
+- `request-run` and `cancel` are human-only regardless of role; `runs`,
+  `queue/claim`, `steps`, `artifact` and `settle` are service-only
+  regardless of scope; both directions are denied with the same status a
+  wholly wrong credential would get.
+- No shipped workflow JSON file contains a webhook/executeCommand/ssh node,
+  an HTTP Request node targeting anything but `control-api:8080`, an
+  embedded service token, or a `$env` read outside the allowed Telegram
+  chat id.
+- Restore contains both automation tables with no orphaned step, no
+  cross-project run, and every settled row still immutable.
+
 ## Deployment and rollback readiness
 
 - Runner readiness passes immediately when active/socket/typed health are

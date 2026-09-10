@@ -311,6 +311,8 @@ services:
       PC_N8N_HEALTH_URL: http://n8n:5678/healthz
       PC_TAILSCALE_STATUS_FILE: /config/tailscale-status.json
       PC_BACKUP_STATUS_FILE: /config/backup-status.json
+      PC_VERIFICATION_STATUS_FILE: /config/verification.json
+      PC_AUTOMATION_MANIFEST_FILE: /config/automation/manifest.json
 
       PC_LOG_LEVEL: ${PC_LOG_LEVEL:-info}
       TZ: UTC
@@ -325,7 +327,28 @@ services:
         source: ${PC_ROOT}/secrets/control-api
         target: /run/secrets
         read_only: true
-      # Status files written by host scripts, read-only.
+      # Status files written by host scripts, PLUS the repository-owned
+      # workflow manifest/workflow registry (config/status/automation/ —
+      # installed by install.sh/update.sh, never written by the Control API,
+      # never reachable through any route: see docs/automation.md), all
+      # read-only, in ONE bind mount.
+      #
+      # This used to be two separate bind mounts: this one at /config, and a
+      # second one nested at /config/automation. That combination is broken
+      # under read_only:true — Docker/runc mounts parent targets before
+      # child targets, so by the time it processes the /config/automation
+      # entry, /config is already an active read-only bind mount, and
+      # creating the /config/automation mountpoint inside it requires a
+      # mkdir that the read-only mount refuses (verified against this exact
+      # image/runtime: "create mountpoint for /config/automation mount:
+      # mkdirat .../config/automation: read-only file system" — an OCI
+      # runtime init failure, not a slow-start/readiness race, so no amount
+      # of retrying the health gate would ever fix it). Folding automation/
+      # into the same host directory this mount already sources from
+      # removes the second mount entirely: /config/automation is just
+      # ordinary content of the one bind mount, mounted once, with runc
+      # never asked to create a mountpoint under read-only rootfs. See
+      # tests/control-api-config-mount-regression.sh.
       - type: bind
         source: ${PC_ROOT}/config/status
         target: /config
@@ -534,6 +557,31 @@ services:
       N8N_PUBLIC_API_SWAGGERUI_DISABLED: "true"
       N8N_BLOCK_FILE_ACCESS_TO_N8N_FILES: "true"
       N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+      # Discovered by `n8n audit` while building the automation feature: this
+      # defaults to enabled, letting anyone with n8n UI access install an
+      # arbitrary third-party community node — a node type this deployment's
+      # workflow-lint (N8N-002) has no visibility into and cannot vet. n8n
+      # UI access is already Tailscale- and owner-account-gated, but that is
+      # exactly the boundary this platform's whole design otherwise refuses
+      # to lean on alone.
+      N8N_COMMUNITY_PACKAGES_ENABLED: "false"
+
+      # Off by default in recent n8n releases (workflow expressions cannot
+      # read $env at all). Re-enabled deliberately, narrowly, for the one
+      # value the shipped workflows' expressions actually read below —
+      # PC_TELEGRAM_CHAT_ID, a notification destination, not a credential.
+      # The bot token itself is never exposed this way: it lives only in
+      # n8n's own encrypted credential store (n8n_encryption_key-protected),
+      # never in an environment variable a workflow expression can read.
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+
+      # --- Values the shipped workflows read via $env in an expression -------
+      # The chat id (not the bot token — see above) that scripts/configure-
+      # telegram.sh mirrors from secrets/telegram_chat_id into stack.env
+      # whenever the Telegram checkpoint is (re)configured. Empty until that
+      # checkpoint has run; the Telegram node then fails closed on a missing
+      # chat id rather than silently notifying nowhere.
+      PC_TELEGRAM_CHAT_ID: ${PC_TELEGRAM_CHAT_ID:-}
 
       # --- Execution data retention ------------------------------------------
       EXECUTIONS_DATA_PRUNE: "true"

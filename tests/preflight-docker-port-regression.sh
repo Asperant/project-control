@@ -39,9 +39,12 @@ fail() {
 }
 
 # Derived from the same source of truth preflight.sh itself uses
-# (PC_COMPOSE_PROJECT in lib/common.sh), never hard-coded independently.
-PROJECT="$(grep -oP 'PC_COMPOSE_PROJECT="\K[^"]+' "${REPO_ROOT}/scripts/lib/common.sh" | head -1)"
-[[ -n "$PROJECT" ]] || fail "could not read PC_COMPOSE_PROJECT from lib/common.sh"
+# (PC_COMPOSE_PROJECT's default in lib/common.sh), never hard-coded
+# independently. The default lives inside a `${PC_COMPOSE_PROJECT:-...}`
+# parameter expansion (so real deployments can still override it), not a
+# bare literal assignment.
+PROJECT="$(grep -oP 'PC_COMPOSE_PROJECT:-\K[^}]+' "${REPO_ROOT}/scripts/lib/common.sh" | head -1)"
+[[ -n "$PROJECT" ]] || fail "could not read PC_COMPOSE_PROJECT's default from lib/common.sh"
 
 FAKE_BIN="${SCRATCH}/bin"
 mkdir -p "$FAKE_BIN"

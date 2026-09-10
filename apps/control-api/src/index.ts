@@ -2,6 +2,10 @@ import pg from 'pg';
 import { buildApp } from './app.js';
 import { AuditLog } from './audit.js';
 import { SessionStore } from './auth/session-store.js';
+import { ServiceTokenStore } from './auth/service-token-store.js';
+import { SERVICE_ACCOUNT_REGISTRY } from './auth/service-accounts.js';
+import { AutomationStore } from './automation/store.js';
+import { loadManifest } from './automation/manifest.js';
 import { loadConfig } from './config.js';
 import { createPool } from './db/pool.js';
 import { runMigrations } from './db/migrate.js';
@@ -36,6 +40,12 @@ async function main(): Promise<void> {
     maxBytes: config.artifacts.maxBytes,
   });
   await artifactStore.initialise();
+
+  // Fails loudly, before the listener opens, on a missing or malformed
+  // manifest — the same "refuses to start rather than run half-configured"
+  // rule config.ts's own header comment states.
+  const automationManifest = loadManifest(config.automation.manifestFile);
+  logger.info({ workflows: automationManifest.workflows.length }, 'automation manifest loaded');
 
   const db = createPool(config);
 
@@ -80,12 +90,25 @@ async function main(): Promise<void> {
     logger,
     audit: new AuditLog(db, logger),
     sessions: new SessionStore(db, config),
+    serviceTokens: new ServiceTokenStore(db),
+    automation: new AutomationStore(db, automationManifest),
+    automationManifest,
     artifactStore,
     runner: new RunnerClient({
       socketPath: config.runner.socketPath,
       timeoutMs: config.runner.timeoutMs,
     }),
   };
+
+  // Reconciles the compiled-in service account registry into the database —
+  // code is the source of truth, the row is a cache of it. Never touches
+  // `status`, so an operator-disabled account survives a redeploy. Blocking
+  // startup on this is deliberate: it is cheap, and a service account that
+  // silently fails to reconcile would make `create-service-token` fail later
+  // with a much less obvious error.
+  for (const definition of SERVICE_ACCOUNT_REGISTRY) {
+    await ctx.serviceTokens.ensureAccount(definition);
+  }
 
   const app = await buildApp(ctx);
 

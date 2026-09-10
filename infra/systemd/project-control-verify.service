@@ -1,0 +1,34 @@
+# =============================================================================
+# Daily verification: runs verify.sh + verify-security.sh and records the
+# result to config/status/verification.json for the Control API and the
+# deployment-readiness automation workflow to read.
+#
+# Independent of n8n and of the container stack being healthy: if the stack
+# is down, that fact should show up as a verification failure, not as a
+# missing status file.
+# =============================================================================
+[Unit]
+Description=Project Control daily verification
+Documentation=file:///srv/project-control/docs/automation.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/srv/project-control
+ExecStart=/srv/project-control/scripts/record-verification-status.sh
+TimeoutStartSec=1800
+Nice=10
+IOSchedulingClass=idle
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+UMask=0077
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pc-verify

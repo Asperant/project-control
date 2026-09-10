@@ -97,12 +97,14 @@ log_step "1/5  Stopping services"
 systemctl stop project-control-backup.timer       2>/dev/null || true
 systemctl stop project-control-check.timer        2>/dev/null || true
 systemctl stop project-control-restore-test.timer 2>/dev/null || true
+systemctl stop project-control-verify.timer       2>/dev/null || true
 systemctl stop project-control-stack.service      2>/dev/null || true
 systemctl stop project-control-runner.service     2>/dev/null || true
 
 systemctl disable project-control-backup.timer       2>/dev/null || true
 systemctl disable project-control-check.timer        2>/dev/null || true
 systemctl disable project-control-restore-test.timer 2>/dev/null || true
+systemctl disable project-control-verify.timer       2>/dev/null || true
 systemctl disable project-control-stack.service      2>/dev/null || true
 systemctl disable project-control-runner.service     2>/dev/null || true
 log_ok "services stopped and disabled"
@@ -133,7 +135,8 @@ log_step "3/5  Removing systemd units"
 for unit in project-control-runner.service project-control-stack.service \
             project-control-backup.service project-control-backup.timer \
             project-control-check.service project-control-check.timer \
-            project-control-restore-test.service project-control-restore-test.timer; do
+            project-control-restore-test.service project-control-restore-test.timer \
+            project-control-verify.service project-control-verify.timer; do
   rm -f "/etc/systemd/system/${unit}"
 done
 rm -rf /etc/systemd/system/project-control-runner.service.d

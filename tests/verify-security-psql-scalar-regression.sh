@@ -178,7 +178,7 @@ PATH="${FAKE_BIN}:${PATH}" FAKE_DOCKER_EXIT=1 FAKE_DOCKER_STDOUT='' FAKE_DOCKER_
   bash -c '
     set -Eeuo pipefail
     trap "exit 99" ERR
-    action_guard="$(docker exec -i fake env PGPASSWORD=x psql -tAc "SELECT 1" 2>/dev/null | tr -d "[:space:]")"
+    action_guard="$(docker exec -i fake env PGPASSWORD=placeholder psql -tAc "SELECT 1" 2>/dev/null | tr -d "[:space:]")"
     echo "UNREACHABLE: ${action_guard}"
   ' >/dev/null 2>&1 || old_pattern_status=$?
 [[ "$old_pattern_status" == "99" ]] || fail "the original var=\"\$(cmd | tr ...)\" shape no longer reproduces the abort (status=${old_pattern_status}) — has bash's pipefail/ERR-trap interaction changed, or was this assertion invalidated?"

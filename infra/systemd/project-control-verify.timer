@@ -1,0 +1,14 @@
+# Daily verification timer. Runs before deployment-readiness's own 07:00
+# schedule so that workflow always has a same-day result to read.
+[Unit]
+Description=Daily Project Control verification
+Documentation=file:///srv/project-control/docs/automation.md
+
+[Timer]
+OnCalendar=*-*-* 06:00:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=project-control-verify.service
+
+[Install]
+WantedBy=timers.target

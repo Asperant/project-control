@@ -21,8 +21,31 @@ require_root
 
 log_step "MANUAL CHECKPOINT 3 — Telegram notifications"
 
+# Mirrors the chat id (never the bot token) into stack.env so n8n's shipped
+# workflows can read it via $env.PC_TELEGRAM_CHAT_ID in an expression — the
+# chat id identifies a notification destination, not a credential; the bot
+# token stays file-only forever and is never referenced by a workflow
+# expression, only by n8n's own encrypted credential store. Idempotent:
+# called from both the "already configured" and the fresh-configuration path
+# below so re-running this script (with or without --force) always leaves
+# stack.env in sync with the secret file. Does not itself restart n8n — the
+# running container only picks this up on its next recreation (`sudo ./pcctl
+# update` or a targeted `recover-deployment`).
+sync_telegram_chat_id_to_stack_env() {
+  local chat_id; chat_id="$(read_secret telegram_chat_id)"
+  local stack_env="${PC_CONFIG_DIR}/stack.env"
+  [[ -f "$stack_env" ]] || return 0
+  local tmp; tmp="$(mktemp)"
+  grep -v '^PC_TELEGRAM_CHAT_ID=' "$stack_env" >"$tmp" || true
+  printf 'PC_TELEGRAM_CHAT_ID=%s\n' "$chat_id" >>"$tmp"
+  install_file "$tmp" "$stack_env" 0640
+  rm -f "$tmp"
+  chown root:root "$stack_env"
+}
+
 if secret_exists telegram_bot_token && secret_exists telegram_chat_id; then
   log_ok "Telegram credentials are already configured"
+  sync_telegram_chat_id_to_stack_env
   if [[ "${1:-}" != "--force" ]]; then
     log_info "re-run with --force to replace them"
     log_info "sending a test notification with the existing credentials…"
@@ -97,6 +120,7 @@ log_ok "token valid for bot @${bot_username}"
 ensure_dir "$PC_SECRETS_DIR" 0700 root root
 write_secret telegram_bot_token "$BOT_TOKEN"
 write_secret telegram_chat_id   "$CHAT_ID"
+sync_telegram_chat_id_to_stack_env
 
 # Scrub the values from this shell's memory as soon as they are persisted.
 BOT_TOKEN=""; CHAT_ID=""

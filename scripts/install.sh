@@ -89,6 +89,14 @@ DIRECTORIES=(
   "config/postgres|0755|root|root"
   "config/postgres/reconcile|0755|root|root"
   "config/status|0755|root|root"
+  # Nested under config/status, not a sibling: this is the single host
+  # directory bind-mounted read-only into control-api at /config (see
+  # infra/compose/compose.yaml) — a second, separately-mounted directory
+  # here would recreate the exact read-only-mountpoint failure that was
+  # fixed by removing it. Container-visible path is unaffected:
+  # /config/automation/manifest.json either way.
+  "config/status/automation|0755|root|root"
+  "config/status/automation/workflows|0755|root|root"
   "secrets|0700|root|root"
   "data|0755|root|root"
   "data/postgres|0700|${PC_POSTGRES_UID}|${PC_POSTGRES_GID}"
@@ -134,6 +142,19 @@ install_file "${PC_REPO_ROOT}/infra/versions.lock.env"    "${PC_ROOT}/config/ver
 install_file "${PC_REPO_ROOT}/infra/postgres/reconcile/reconcile-roles-and-databases.sh" \
              "${PC_ROOT}/config/postgres/reconcile/reconcile-roles-and-databases.sh" 0755
 
+# The workflow manifest is repository-owned config, installed the same way
+# the Caddyfile is — root-owned, read-only-mounted into control-api, never
+# writable by anything this platform runs. The workflow JSON files
+# themselves (infra/n8n/workflows/*.workflow.json) are installed into n8n
+# separately by install-workflows.sh, once n8n's owner account exists.
+install_file "${PC_REPO_ROOT}/infra/n8n/workflows/manifest.json" \
+             "${PC_ROOT}/config/status/automation/manifest.json" 0644
+if compgen -G "${PC_REPO_ROOT}/infra/n8n/workflows/*.workflow.json" >/dev/null; then
+  for workflow_file in "${PC_REPO_ROOT}"/infra/n8n/workflows/*.workflow.json; do
+    install_file "$workflow_file" "${PC_ROOT}/config/status/automation/workflows/$(basename "$workflow_file")" 0644
+  done
+fi
+
 # Stale layout from before the db-bootstrap reconciliation service existed:
 # the old directory is unmounted by the current compose.yaml, and it holds
 # nothing but a copy of config this installer regenerates, never data.
@@ -148,7 +169,8 @@ for migration in "${PC_REPO_ROOT}"/migrations/*.sql; do
   install_file "$migration" "${PC_ROOT}/migrations/$(basename "$migration")" 0644
 done
 
-for script in backup.sh restore-test.sh verify.sh verify-security.sh telegram-notify.sh; do
+for script in backup.sh restore-test.sh verify.sh verify-security.sh telegram-notify.sh \
+              record-verification-status.sh; do
   if [[ -f "${PC_SCRIPTS_DIR}/${script}" ]]; then
     install_file "${PC_SCRIPTS_DIR}/${script}" "${PC_ROOT}/scripts/${script}" 0750
   fi
@@ -422,6 +444,8 @@ UNITS=(
   project-control-check.timer
   project-control-restore-test.service
   project-control-restore-test.timer
+  project-control-verify.service
+  project-control-verify.timer
 )
 
 units_changed=0
@@ -525,6 +549,7 @@ systemctl enable project-control-stack.service   >/dev/null 2>&1 || true
 systemctl enable project-control-backup.timer    >/dev/null 2>&1 || true
 systemctl enable project-control-check.timer     >/dev/null 2>&1 || true
 systemctl enable project-control-restore-test.timer >/dev/null 2>&1 || true
+systemctl enable --now project-control-verify.timer >/dev/null 2>&1 || true
 log_ok "boot units and backup timers enabled"
 
 # -----------------------------------------------------------------------------

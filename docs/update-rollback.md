@@ -121,6 +121,58 @@ requires it and backup/restore compatibility has been reviewed. The recovery
 rollback is successful only when all five exact target image IDs and strict
 verification pass.
 
+This same command sequence is also the correct recovery when a failed update
+has left one or more application containers stuck in Docker's `created`
+state (container *start* failed — an OCI runtime error, not a slow-start
+race) — `rollback` does not inspect current container state before it acts;
+it only requires the target snapshot to be internally coherent and its exact
+image IDs to still be present locally, then unconditionally recreates all
+five containers from that snapshot regardless of whatever state they were
+already in. **The one fact that decides whether this is the right tool
+instead of `recover-deployment` (below) is whether the pending migration was
+ever actually applied**, checkable with:
+
+```bash
+sudo ./pcctl recover-deployment
+```
+
+— read its `RCV-006`/`RCV-007` output, don't act on it (it will correctly
+refuse either way; that refusal is not the answer, its diagnosis is):
+
+- **`RCV-007` fails because migrations are pending, and the database's
+  applied ledger has not moved past the previous release (`RCV-006` still
+  passes as a subset check, it says nothing about *how much* is pending).**
+  The only thing that ever runs real, committing SQL is the Control API's
+  own entrypoint on a successful start (see `apps/control-api/src/db/
+  migrate.ts` — idempotent, checksum-verified, applied once per version) —
+  so a container that never started could not have applied anything.
+  Rolling the application images back to the pre-update snapshot is fully
+  safe here: the old images expect exactly the schema that's still there.
+  Use the sequence above.
+
+  **If `rollback` itself then refuses** — its own "Verifying the target
+  images are present" step reports one or more of `control-api`/`web`/
+  `caddy` as pruned — rolling back is no longer available at all, and trying
+  an older point on the list is not a substitute (there is no guarantee any
+  older snapshot's exact images survived either, and probing them one by one
+  is not a supported recovery step). This does not make the situation
+  unsafe — migrations are still confirmed unapplied — it only means the
+  "roll back, then retry `update`" path is closed. Use
+  `sudo ./pcctl resume-update` instead (see below): it completes the same
+  interrupted update forward, with `update.sh`'s own safeguards (a fresh
+  backup, an irreversible-migration scan) applied before anything is
+  touched, precisely because a real migration is about to commit for the
+  first time.
+- **The pending migration(s) were already committed** (the previous release
+  got e.g. `control-api` far enough to start at least once before a *later*
+  recreation attempt got stuck `created`). Rolling back now would start an
+  older Control API image against a schema it does not understand — refused
+  automatically by `update.sh` itself for exactly this reason (see
+  "Additive migration rollback limitation" above). Use
+  `sudo ./pcctl recover-deployment` instead (below) — never `rollback`,
+  never `resume-update` — and never hand-apply, retry, or skip a migration
+  to route around this.
+
 ### Supported recovery when that rollback point is also unrecoverable
 
 `rollback` itself refuses to run if any locally built image it needs
@@ -176,6 +228,122 @@ is unhealthy, the runner is not ready, or the database is genuinely ahead of
 what's deployed — it is reporting a real problem with the running stack, not
 a metadata problem; fix that condition (see the corresponding `RUN-*`/`CNT-*`
 check in `pcctl verify`) before retrying.
+
+### Supported recovery when a locally-built service is stuck `created`
+
+A different incident from either recovery above: `postgres` and `n8n` are
+healthy, but one or more of `control-api`/`web`/`caddy` never made it past
+Docker's `created` state, because container *start* itself failed (an OCI
+runtime error — e.g. a nested bind mount under an already read-only parent —
+not a slow-start readiness race). `docker inspect` still resolves the
+`created` container's image: `compose up` pins the image at container-create
+time regardless of whether the later `start` succeeds, so the stuck
+container is already the new image, it just never ran.
+
+This is **not** what `update --force` or a broader `reconcile-state` are for.
+`update` refuses to publish a rollback point from an incoherent deployment
+(the same coherence gate as above), and rolling application images back
+automatically is unsafe once a migration may have advanced the schema ledger
+— an older Control API image can refuse to start against newer schema.
+`reconcile-state` never recreates anything; it only repairs metadata for an
+already-healthy stack, and a `created` container fails its very first check.
+
+Use the dedicated command instead:
+
+```bash
+sudo ./pcctl recover-deployment
+```
+
+It proves, before touching anything: `postgres`/`n8n` are healthy and outside
+its scope; every unhealthy service is specifically `created` (anything else —
+`exited`, `restarting`, `dead` — is refused as a different incident); the
+database's applied migration ledger is a subset of the current repository's
+migrations with nothing pending (recovery recreates containers, it never
+advances the schema); the runner is ready; a successful backup exists (the
+database recovery boundary this operation stays behind); and the current
+repository's Compose file resolves — via a real `docker compose config`
+render, not a source grep — to exactly one `control-api` `/config` mount,
+none nested. Only then does it rebuild images with `build.sh` (the same
+deterministic step `update` always runs), stage the current Compose/
+automation config, re-run the migration dry-run as a final live check,
+remove **only** the specific `created` container(s) it already proved are
+`created`, recreate them with `--no-deps` (postgres/n8n and any
+already-healthy service are never named), health-gate them, run the real,
+unmodified `verify.sh` and `verify-security.sh`, and — only after every one
+of those passes — hand off to the real, unmodified `reconcile-state.sh` to
+publish the new, coherent version lock. It accepts no override flag,
+including `--force`. See `tests/recover-deployment-regression.sh`.
+
+Follow up exactly like any other successful `reconcile-state` run:
+
+```bash
+sudo ./pcctl verify
+sudo ./pcctl verify-security
+sudo ./pcctl status
+```
+
+`recover-deployment` refuses (rather than guessing) if a targeted service is
+unhealthy in a state other than `created`, if `postgres`/`n8n` are unhealthy,
+if a migration is pending, or if no successful backup is on record — in each
+case, nothing is touched and the failing check tells you what to fix first.
+
+### Supported recovery when a stuck service also has a pending migration and rollback is unavailable
+
+The same `created`-container incident as above, but `RCV-007` reports
+migration(s) genuinely pending (not yet committed — see "Interpreting
+`recover-deployment`'s diagnosis" above) **and** `rollback` cannot be used
+either, because its target snapshot's exact `control-api`/`web`/`caddy`
+images have been pruned. `recover-deployment` correctly refuses here (its
+whole design is to never be the tool that first advances the schema); do not
+weaken that refusal or repurpose the command. Use the dedicated command
+instead:
+
+```bash
+sudo ./pcctl resume-update
+```
+
+It proves everything `recover-deployment` does (`postgres`/`n8n` healthy and
+untouched; every unhealthy service specifically `created`; the applied
+ledger a clean subset of the repository's migrations with **at least one**
+migration genuinely pending — the inverse of `recover-deployment`'s
+precondition; the runner ready; the current repository's Compose resolves to
+exactly one `control-api` `/config` mount), plus the two additional
+safeguards this incident specifically needs because a real migration is
+about to commit for the first time:
+
+- **A fresh backup taken by this run** — not merely "a successful backup is
+  on record" (`recover-deployment`'s weaker check is enough for a tool that
+  never touches the schema; this one is not that tool).
+- **A hard, unconditional refusal on any irreversible pending migration**
+  (`DROP TABLE`/`COLUMN`/`DATABASE`/`SCHEMA`, `TRUNCATE`) — the same
+  detection `update.sh` step 5 uses, but with no `--force` escape at all:
+  a recovery run does not get to make that judgement call in the moment the
+  way a live `update` operator can.
+
+Only after both pass does it rebuild images, stage the current Compose/
+automation config, run the migration dry-run as a final live check, remove
+**only** the specific `created` container(s) it already proved are
+`created`, and recreate them with `--no-deps`. The pending migration(s) are
+never applied by this script directly — recreating `control-api` triggers
+its own entrypoint's real, idempotent, checksum-verified migration run
+(`apps/control-api/src/db/migrate.ts`), the exact same mechanism `update.sh`
+itself would have used. It then health-gates, runs the real, unmodified
+`verify.sh`/`verify-security.sh`, and only then hands off to the real,
+unmodified `reconcile-state.sh`. It accepts no override flag, including
+`--force`. See `tests/resume-update-regression.sh`.
+
+Follow up exactly like a successful `recover-deployment` run:
+
+```bash
+sudo ./pcctl verify
+sudo ./pcctl verify-security
+sudo ./pcctl status
+```
+
+If a mid-run failure happens **after** the migration dry-run passed but the
+run did not reach "resume-update complete", do not assume the migration did
+or did not commit and do not re-run this tool blindly — check
+`schema_migrations` directly first, exactly as its own failure messages say.
 
 ---
 

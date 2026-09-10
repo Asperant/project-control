@@ -13,6 +13,9 @@
     "start": "node dist/index.js",
     "migrate": "node dist/cli/migrate.js",
     "create-admin": "node dist/cli/create-admin.js",
+    "create-service-token": "node dist/cli/create-service-token.js",
+    "list-service-tokens": "node dist/cli/list-service-tokens.js",
+    "revoke-service-token": "node dist/cli/revoke-service-token.js",
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration"

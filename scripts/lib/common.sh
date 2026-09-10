@@ -25,7 +25,13 @@ export PC_REPO_ROOT PC_SCRIPTS_DIR
 PC_ROOT="${PC_ROOT:-/srv/project-control}"
 export PC_ROOT
 
-PC_COMPOSE_PROJECT="project-control"
+# Override-able (see tests/n8n-workflow-import-live-regression.sh, which
+# points a whole PC_ROOT/PC_COMPOSE_PROJECT pair at a disposable container so
+# it can run install-workflows.sh unmodified against a throwaway n8n instead
+# of production; a hard-coded assignment here silently defeated that
+# isolation and let a real install-workflows.sh run land a workflow in the
+# live project-control-n8n container instead of the disposable one).
+PC_COMPOSE_PROJECT="${PC_COMPOSE_PROJECT:-project-control}"
 export PC_COMPOSE_PROJECT
 
 PC_SECRETS_DIR="${PC_ROOT}/secrets"
