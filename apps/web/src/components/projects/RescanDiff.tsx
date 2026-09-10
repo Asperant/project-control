@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { RescanDiffEntry, RescanProjectResponse } from '@project-control/contracts';
-import { ApiError, api } from '../../api-client';
+import { api } from '../../api-client';
+import { useApiErrorHandler } from '../../hooks/useApiErrorHandler';
+import { ErrorAlert } from '../ErrorAlert';
 
 const SEVERITY_CLASS: Record<RescanDiffEntry['severity'], string> = {
   info: 'alert-ok',
@@ -24,7 +26,7 @@ export function RescanDiff({
   onSessionExpired: () => void;
 }): React.JSX.Element {
   const [result, setResult] = useState<RescanProjectResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { error, setError, handleError } = useApiErrorHandler(onSessionExpired, 'The rescan could not be started.');
   const [confirmIdentity, setConfirmIdentity] = useState(false);
   const [applying, setApplying] = useState(false);
 
@@ -36,21 +38,13 @@ export function RescanDiff({
         if (!cancelled) setResult(response);
       } catch (caught) {
         if (cancelled) return;
-        if (caught instanceof ApiError) {
-          if (caught.isAuthFailure) {
-            onSessionExpired();
-            return;
-          }
-          setError(caught.message);
-        } else {
-          setError('The rescan could not be started.');
-        }
+        handleError(caught);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [projectId, onSessionExpired]);
+  }, [projectId, handleError]);
 
   async function handleApply(): Promise<void> {
     if (!result) return;
@@ -63,15 +57,7 @@ export function RescanDiff({
       });
       onDone();
     } catch (caught) {
-      if (caught instanceof ApiError) {
-        if (caught.isAuthFailure) {
-          onSessionExpired();
-          return;
-        }
-        setError(caught.message);
-      } else {
-        setError('The rescan could not be applied.');
-      }
+      handleError(caught, 'The rescan could not be applied.');
     } finally {
       setApplying(false);
     }
@@ -81,11 +67,7 @@ export function RescanDiff({
     <section aria-labelledby="rescan-heading">
       <h2 id="rescan-heading">Rescan changes</h2>
 
-      {error && (
-        <div className="alert alert-error" role="alert">
-          {error}
-        </div>
-      )}
+      <ErrorAlert error={error?.message ?? null} requestId={error?.requestId ?? null} />
 
       {!result && !error && <p>Scanning the folder…</p>}
 

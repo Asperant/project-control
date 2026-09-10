@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { WorkflowRunDetail } from '@project-control/contracts';
-import { ApiError, api } from '../../api-client';
+import { api } from '../../api-client';
 import { RunStatusBadge, SeverityBadge, StepStatusBadge } from './badges';
+import { useApiErrorHandler } from '../../hooks/useApiErrorHandler';
+import { ErrorAlert } from '../ErrorAlert';
 
 const formatTime = (iso: string): string => new Date(iso).toLocaleString();
 
@@ -9,7 +11,7 @@ export function AutomationRunDetail({
   runId, canWrite, onBack, onSessionExpired,
 }: { runId: string; canWrite: boolean; onBack: () => void; onSessionExpired: () => void }): React.JSX.Element {
   const [detail, setDetail] = useState<WorkflowRunDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { error, setError, handleError } = useApiErrorHandler(onSessionExpired, 'Unable to load this run.');
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async (signal?: AbortSignal) => {
@@ -18,14 +20,9 @@ export function AutomationRunDetail({
       setError(null);
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === 'AbortError') return;
-      if (caught instanceof ApiError) {
-        if (caught.isAuthFailure) { onSessionExpired(); return; }
-        setError(caught.message);
-      } else {
-        setError('Unable to load this run.');
-      }
+      handleError(caught);
     }
-  }, [runId, onSessionExpired]);
+  }, [runId, handleError, setError]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -40,12 +37,7 @@ export function AutomationRunDetail({
       await api.cancelWorkflowRun(runId);
       await load();
     } catch (caught) {
-      if (caught instanceof ApiError) {
-        if (caught.isAuthFailure) { onSessionExpired(); return; }
-        setError(caught.message);
-      } else {
-        setError('Unable to cancel this run.');
-      }
+      handleError(caught, 'Unable to cancel this run.');
     } finally {
       setBusy(false);
     }
@@ -55,7 +47,7 @@ export function AutomationRunDetail({
     return (
       <section className="agent-run-detail">
         <button type="button" onClick={onBack}>&larr; Back</button>
-        <div className="alert alert-error" role="alert">{error}</div>
+        <ErrorAlert error={error.message} requestId={error.requestId} />
       </section>
     );
   }
@@ -86,7 +78,7 @@ export function AutomationRunDetail({
         )}
       </div>
 
-      {error && <div className="alert alert-error" role="alert">{error}</div>}
+      <ErrorAlert error={error?.message ?? null} requestId={error?.requestId ?? null} />
 
       <article className="card">
         <span className="card-title">Run</span>

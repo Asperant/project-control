@@ -15,8 +15,18 @@ export function ProjectSwitcher(): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState('');
   const [results, setResults] = useState<ProjectSummary[]>([]);
+  const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const recent = readRecentProjects();
+
+  // The keyboard-navigable list spans both sections exactly as rendered: the
+  // "Recent" shortcuts (only shown while unfiltered) followed by the live
+  // project results.
+  const visibleOptions = !filter && recent.length > 0 ? [...recent, ...results] : results;
+
+  useEffect(() => {
+    setHighlightedIndex(-1);
+  }, [open, filter, results]);
 
   useEffect(() => {
     if (!open) return;
@@ -47,6 +57,25 @@ export function ProjectSwitcher(): React.JSX.Element {
     navigate(`/projects/${project.id}`);
   }
 
+  function onKeyDown(event: React.KeyboardEvent<HTMLInputElement>): void {
+    if (!open) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setHighlightedIndex((index) => Math.min(visibleOptions.length - 1, index + 1));
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setHighlightedIndex((index) => Math.max(0, index - 1));
+    } else if (event.key === 'Enter') {
+      const target = visibleOptions[highlightedIndex];
+      if (target) {
+        event.preventDefault();
+        go(target);
+      }
+    } else if (event.key === 'Escape') {
+      setOpen(false);
+    }
+  }
+
   return (
     <div className="project-switcher" ref={containerRef}>
       <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open} aria-haspopup="listbox">
@@ -54,21 +83,35 @@ export function ProjectSwitcher(): React.JSX.Element {
       </button>
 
       {open && (
-        <div className="project-switcher-menu" role="listbox">
+        <div className="project-switcher-menu" role="listbox" id="project-switcher-listbox">
           <input
             type="search"
             placeholder="Filter projects…"
             aria-label="Filter projects"
             value={filter}
             onChange={(event) => setFilter(event.target.value)}
+            onKeyDown={onKeyDown}
+            role="combobox"
+            aria-expanded={open}
+            aria-controls="project-switcher-listbox"
+            aria-activedescendant={highlightedIndex >= 0 ? `project-switcher-option-${highlightedIndex}` : undefined}
             autoFocus
           />
 
           {!filter && recent.length > 0 && (
             <>
               <div className="menu-heading">Recent</div>
-              {recent.map((project) => (
-                <button key={project.id} type="button" role="option" aria-selected={false} onClick={() => go(project)}>
+              {recent.map((project, index) => (
+                <button
+                  key={project.id}
+                  id={`project-switcher-option-${index}`}
+                  type="button"
+                  role="option"
+                  aria-selected={index === highlightedIndex}
+                  className={index === highlightedIndex ? 'is-highlighted' : undefined}
+                  onMouseEnter={() => setHighlightedIndex(index)}
+                  onClick={() => go(project)}
+                >
                   {project.name}
                 </button>
               ))}
@@ -77,11 +120,23 @@ export function ProjectSwitcher(): React.JSX.Element {
 
           <div className="menu-heading">{filter ? 'Matching' : 'All projects'}</div>
           {results.length === 0 && <span className="global-search-status">No projects found.</span>}
-          {results.map((project) => (
-            <button key={project.id} type="button" role="option" aria-selected={false} onClick={() => go(project)}>
-              {project.name}
-            </button>
-          ))}
+          {results.map((project, resultIndex) => {
+            const index = (!filter && recent.length > 0 ? recent.length : 0) + resultIndex;
+            return (
+              <button
+                key={project.id}
+                id={`project-switcher-option-${index}`}
+                type="button"
+                role="option"
+                aria-selected={index === highlightedIndex}
+                className={index === highlightedIndex ? 'is-highlighted' : undefined}
+                onMouseEnter={() => setHighlightedIndex(index)}
+                onClick={() => go(project)}
+              >
+                {project.name}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

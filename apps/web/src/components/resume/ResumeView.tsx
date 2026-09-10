@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ResumeProjectResponse, WorkSession } from '@project-control/contracts';
-import { ApiError, api } from '../../api-client';
+import { api } from '../../api-client';
 import { formatRelativeTime } from '../projects/badges';
+import { useModalDialog } from '../../hooks/useModalDialog';
+import { useApiErrorHandler } from '../../hooks/useApiErrorHandler';
+import { ErrorAlert } from '../ErrorAlert';
 
 type ResumeViewProps = {
   projectId: string;
@@ -83,9 +86,9 @@ export function ResumeView({ projectId, canWrite, archived, onSessionExpired, on
   const [loading, setLoading] = useState(!initialData);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [dialogError, setDialogError] = useState<string | null>(null);
-  const [historyError, setHistoryError] = useState<string | null>(null);
+  const { error, setError, handleError } = useApiErrorHandler(onSessionExpired, 'Unable to load the project resume.');
+  const { error: dialogError, setError: setDialogError, handleError: handleDialogError } = useApiErrorHandler(onSessionExpired, 'Unable to update the work session.');
+  const { error: historyError, setError: setHistoryError, handleError: handleHistoryError } = useApiErrorHandler(onSessionExpired, 'Unable to load older work sessions.');
   const [now, setNow] = useState(() => Date.now());
   const [startGoal, setStartGoal] = useState('');
   const [dialog, setDialog] = useState<Dialog>(null);
@@ -96,18 +99,6 @@ export function ResumeView({ projectId, canWrite, archived, onSessionExpired, on
   const [createCheckpoint, setCreateCheckpoint] = useState(false);
   const [checkpointNote, setCheckpointNote] = useState('');
   const [amendment, setAmendment] = useState('');
-
-  const handleError = useCallback((caught: unknown, fallback: string) => {
-    if (caught instanceof ApiError) {
-      if (caught.isAuthFailure) {
-        onSessionExpired();
-        return;
-      }
-      setError(caught.message);
-    } else {
-      setError(fallback);
-    }
-  }, [onSessionExpired]);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -121,11 +112,11 @@ export function ResumeView({ projectId, canWrite, archived, onSessionExpired, on
       setError(null);
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === 'AbortError') return;
-      handleError(caught, 'Unable to load the project resume.');
+      handleError(caught);
     } finally {
       setLoading(false);
     }
-  }, [handleError, projectId]);
+  }, [handleError, projectId, setError]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -133,14 +124,11 @@ export function ResumeView({ projectId, canWrite, archived, onSessionExpired, on
     return () => controller.abort();
   }, [load]);
 
-  useEffect(() => {
-    if (!dialog) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !busy) setDialog(null);
-    };
-    window.addEventListener('keydown', closeOnEscape);
-    return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [busy, dialog]);
+  const { containerRef: dialogRef } = useModalDialog<HTMLDivElement>({
+    open: dialog !== null,
+    onClose: () => setDialog(null),
+    busy,
+  });
 
   useEffect(() => {
     if (!resume?.activeWorkSession) return;
@@ -217,12 +205,7 @@ export function ResumeView({ projectId, canWrite, archived, onSessionExpired, on
       }
       await refreshAfterMutation();
     } catch (caught) {
-      if (caught instanceof ApiError) {
-        if (caught.isAuthFailure) onSessionExpired();
-        else setDialogError(caught.message);
-      } else {
-        setDialogError('Unable to update the work session.');
-      }
+      handleDialogError(caught);
     } finally {
       setBusy(false);
     }
@@ -249,12 +232,7 @@ export function ResumeView({ projectId, canWrite, archived, onSessionExpired, on
       setHistoryCursor(response.nextCursor);
       setError(null);
     } catch (caught) {
-      if (caught instanceof ApiError) {
-        if (caught.isAuthFailure) onSessionExpired();
-        else setHistoryError(caught.message);
-      } else {
-        setHistoryError('Unable to load older work sessions.');
-      }
+      handleHistoryError(caught);
     } finally {
       setLoadingOlder(false);
     }
@@ -264,7 +242,8 @@ export function ResumeView({ projectId, canWrite, archived, onSessionExpired, on
   if (!resume) {
     return (
       <div className="alert alert-error" role="alert">
-        {error ?? 'Project resume is unavailable.'} <button type="button" onClick={() => void load()}>Retry</button>
+        {error?.message ?? 'Project resume is unavailable.'}
+        {error?.requestId && <> <code>{error.requestId}</code></>} <button type="button" onClick={() => void load()}>Retry</button>
       </div>
     );
   }
@@ -276,7 +255,7 @@ export function ResumeView({ projectId, canWrite, archived, onSessionExpired, on
 
   return (
     <div className="resume-view">
-      {error && <div className="alert alert-error" role="alert">{error}</div>}
+      <ErrorAlert error={error?.message ?? null} requestId={error?.requestId ?? null} />
       {readOnly && <div className="alert alert-warn" role="status">{archived || resume.readOnly ? 'This archived project is read-only.' : 'Your account has read-only access to Work Sessions.'}</div>}
 
       <section className="card resume-primary" aria-labelledby="resume-focus">
@@ -373,14 +352,14 @@ export function ResumeView({ projectId, canWrite, archived, onSessionExpired, on
           <ol className="resume-history">{history.map((session) => <li key={session.id}><SessionDetails session={session} onOpenMemory={onOpenMemory} />{!readOnly && session.status === 'closed' && <button type="button" onClick={() => openAmendment(session)}>Add correction</button>}</li>)}</ol>
         )}
         {canLoadOlder && <button type="button" disabled={loadingOlder} onClick={() => void loadOlder()}>{loadingOlder ? 'Loading…' : `Load older (${historyTotal - history.length} remaining)`}</button>}
-        {historyError && <div className="alert alert-error" role="alert">{historyError}</div>}
+        <ErrorAlert error={historyError?.message ?? null} requestId={historyError?.requestId ?? null} />
       </section>
 
       {dialog && (
         <div className="resume-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setDialog(null); }}>
-          <div className="card resume-dialog" role="dialog" aria-modal="true" aria-labelledby="resume-dialog-title">
+          <div ref={dialogRef} className="card resume-dialog" role="dialog" aria-modal="true" aria-labelledby="resume-dialog-title">
             <div className="card-head"><h3 id="resume-dialog-title">{dialog.kind === 'edit' ? 'Edit session goal' : dialog.kind === 'close' ? 'End work session' : 'Add session correction'}</h3><button type="button" aria-label="Close dialog" disabled={busy} onClick={() => setDialog(null)}>×</button></div>
-            {dialogError && <div className="alert alert-error" role="alert">{dialogError}</div>}
+            <ErrorAlert error={dialogError?.message ?? null} requestId={dialogError?.requestId ?? null} />
             {dialog.kind === 'edit' && <div className="field"><label htmlFor="resume-edit-goal">Goal</label><textarea id="resume-edit-goal" autoFocus rows={4} maxLength={4000} value={dialogGoal} onChange={(event) => setDialogGoal(event.target.value)} /></div>}
             {dialog.kind === 'close' && <>
               <div className="field"><label htmlFor="resume-outcome">Outcome / Summary (required)</label><textarea id="resume-outcome" autoFocus rows={5} maxLength={10000} value={outcome} onChange={(event) => setOutcome(event.target.value)} /></div>

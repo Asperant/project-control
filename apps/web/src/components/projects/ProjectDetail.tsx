@@ -8,9 +8,11 @@ import type {
   RuleCategory,
   TechnologyCategory,
 } from '@project-control/contracts';
-import { ApiError, api } from '../../api-client';
+import { api } from '../../api-client';
 import { AccessibilityBadge, ProjectPriorityBadge, ProjectStatusBadge, formatRelativeTime } from './badges';
 import { rememberRecentProject } from './recentProjects';
+import { useApiErrorHandler } from '../../hooks/useApiErrorHandler';
+import { ErrorAlert } from '../ErrorAlert';
 import { RoadmapView } from '../roadmap/RoadmapView';
 import { MemoryView } from '../memory/MemoryView';
 import { AgentRunsView } from '../agent-runs/AgentRunsView';
@@ -36,7 +38,7 @@ export function ProjectDetail({
 }): React.JSX.Element {
   const [project, setProject] = useState<ProjectDetailType | null>(null);
   const [activity, setActivity] = useState<ProjectActivityEntry[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const { error, setError, handleError } = useApiErrorHandler(onSessionExpired, 'The request failed.');
   const [busy, setBusy] = useState(false);
 
   // The active tab and the memory-view's checkpoint filter both live in the
@@ -79,18 +81,10 @@ export function ProjectDetail({
         rememberRecentProject(projectId, detail.project.name);
       } catch (caught) {
         if (caught instanceof DOMException && caught.name === 'AbortError') return;
-        if (caught instanceof ApiError) {
-          if (caught.isAuthFailure) {
-            onSessionExpired();
-            return;
-          }
-          setError(caught.message);
-        } else {
-          setError('Unable to load the project.');
-        }
+        handleError(caught, 'Unable to load the project.');
       }
     },
-    [projectId, onSessionExpired],
+    [projectId, handleError, setError],
   );
 
   useEffect(() => {
@@ -138,18 +132,6 @@ export function ProjectDetail({
     }
   }
 
-  function handleError(caught: unknown): void {
-    if (caught instanceof ApiError) {
-      if (caught.isAuthFailure) {
-        onSessionExpired();
-        return;
-      }
-      setError(caught.message);
-    } else {
-      setError('The request failed.');
-    }
-  }
-
   async function handleArchive(): Promise<void> {
     setBusy(true);
     try {
@@ -181,9 +163,7 @@ export function ProjectDetail({
   if (error && !project) {
     return (
       <section>
-        <div className="alert alert-error" role="alert">
-          {error}
-        </div>
+        <ErrorAlert error={error.message} requestId={error.requestId} />
         <button type="button" onClick={onBack}>
           ← Back to projects
         </button>
@@ -222,11 +202,7 @@ export function ProjectDetail({
         )}
       </div>
 
-      {error && (
-        <div className="alert alert-error" role="alert">
-          {error}
-        </div>
-      )}
+      <ErrorAlert error={error?.message ?? null} requestId={error?.requestId ?? null} />
       {project.status === 'archived' && (
         <div className="alert alert-warn" role="status">
           This project is archived. Reactivate it to make changes.

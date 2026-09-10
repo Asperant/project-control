@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { DevelopmentStateResponse, RepositoryAction } from '@project-control/contracts';
-import { ApiError, api } from '../../api-client';
+import { api } from '../../api-client';
+import { useApiErrorHandler } from '../../hooks/useApiErrorHandler';
+import { ErrorAlert } from '../ErrorAlert';
 
 type Props = {
   projectId: string;
@@ -47,20 +49,8 @@ export function ActionsPanel({ projectId, archived, canWrite, development, onSes
   const [history, setHistory] = useState<RepositoryAction[]>([]);
   const [loading, setLoading] = useState(true);
   const [step, setStep] = useState<Step>({ kind: 'idle' });
-  const [error, setError] = useState<string | null>(null);
+  const { error, setError, handleError } = useApiErrorHandler(onSessionExpired);
   const [busy, setBusy] = useState(false);
-
-  const handleError = useCallback((caught: unknown, fallback: string) => {
-    if (caught instanceof ApiError) {
-      if (caught.isAuthFailure) {
-        onSessionExpired();
-        return;
-      }
-      setError(caught.message);
-    } else {
-      setError(fallback);
-    }
-  }, [onSessionExpired]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -159,7 +149,7 @@ export function ActionsPanel({ projectId, archived, canWrite, development, onSes
           {archived ? 'This project is archived; Repository Actions are disabled.' : 'Your account has read-only access to Repository Actions.'}
         </p>
       )}
-      {error && <div className="alert alert-error" role="alert">{error}</div>}
+      <ErrorAlert error={error?.message ?? null} requestId={error?.requestId ?? null} />
 
       {!readOnly && step.kind === 'idle' && (
         pending ? (

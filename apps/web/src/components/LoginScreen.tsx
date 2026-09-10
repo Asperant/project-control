@@ -19,6 +19,7 @@ export function LoginScreen({
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [requestId, setRequestId] = useState<string | null>(null);
   const [connectivityIssue, setConnectivityIssue] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -32,6 +33,7 @@ export function LoginScreen({
 
     setBusy(true);
     setError(null);
+    setRequestId(null);
     setConnectivityIssue(false);
 
     try {
@@ -44,6 +46,7 @@ export function LoginScreen({
       if (caught instanceof ApiError) {
         setConnectivityIssue(caught.isConnectivityFailure);
         setError(caught.message);
+        setRequestId(caught.requestId ?? null);
       } else {
         setError('An unexpected error occurred.');
       }
@@ -66,6 +69,11 @@ export function LoginScreen({
             role="alert"
           >
             {error}
+            {requestId && (
+              <p className="hint">
+                Request ID: <code>{requestId}</code>
+              </p>
+            )}
             {connectivityIssue && (
               <p className="hint">
                 Check the stack with <code>./pcctl status</code> on the host.

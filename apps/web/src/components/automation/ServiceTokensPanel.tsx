@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ServiceTokenSummary } from '@project-control/contracts';
-import { ApiError, api } from '../../api-client';
+import { api } from '../../api-client';
+import { useApiErrorHandler } from '../../hooks/useApiErrorHandler';
+import { ErrorAlert } from '../ErrorAlert';
 
 const formatTime = (iso: string | null): string => (iso ? new Date(iso).toLocaleString() : 'never');
 
@@ -14,7 +16,7 @@ const formatTime = (iso: string | null): string => (iso ? new Date(iso).toLocale
  */
 export function ServiceTokensPanel({ onSessionExpired }: { onSessionExpired: () => void }): React.JSX.Element {
   const [tokens, setTokens] = useState<ServiceTokenSummary[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const { error, setError, handleError } = useApiErrorHandler(onSessionExpired, 'Unable to load service tokens.');
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const load = useCallback(async (signal?: AbortSignal) => {
@@ -24,14 +26,9 @@ export function ServiceTokensPanel({ onSessionExpired }: { onSessionExpired: () 
       setError(null);
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === 'AbortError') return;
-      if (caught instanceof ApiError) {
-        if (caught.isAuthFailure) { onSessionExpired(); return; }
-        setError(caught.message);
-      } else {
-        setError('Unable to load service tokens.');
-      }
+      handleError(caught);
     }
-  }, [onSessionExpired]);
+  }, [handleError, setError]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -47,12 +44,7 @@ export function ServiceTokensPanel({ onSessionExpired }: { onSessionExpired: () 
       await api.revokeServiceToken(tokenId);
       await load();
     } catch (caught) {
-      if (caught instanceof ApiError) {
-        if (caught.isAuthFailure) { onSessionExpired(); return; }
-        setError(caught.message);
-      } else {
-        setError('Unable to revoke this token.');
-      }
+      handleError(caught, 'Unable to revoke this token.');
     } finally {
       setBusyId(null);
     }
@@ -66,7 +58,7 @@ export function ServiceTokensPanel({ onSessionExpired }: { onSessionExpired: () 
         The value itself is shown once, at the terminal, and is never stored or displayed anywhere again.
       </p>
 
-      {error && <div className="alert alert-error" role="alert">{error}</div>}
+      <ErrorAlert error={error?.message ?? null} requestId={error?.requestId ?? null} />
 
       {tokens.length === 0 ? (
         <p className="hint">No service tokens have been minted.</p>

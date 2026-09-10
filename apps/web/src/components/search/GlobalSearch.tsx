@@ -31,7 +31,12 @@ export function GlobalSearch({ onSessionExpired }: { onSessionExpired: () => voi
   const [results, setResults] = useState<SearchResult[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setHighlightedIndex(-1);
+  }, [results]);
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -79,6 +84,25 @@ export function GlobalSearch({ onSessionExpired }: { onSessionExpired: () => voi
     if (link) navigate(link);
   }
 
+  function onKeyDown(event: React.KeyboardEvent<HTMLInputElement>): void {
+    if (!open || results.length === 0) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setHighlightedIndex((index) => Math.min(results.length - 1, index + 1));
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setHighlightedIndex((index) => Math.max(0, index - 1));
+    } else if (event.key === 'Enter') {
+      const target = results[highlightedIndex];
+      if (target) {
+        event.preventDefault();
+        openResult(target);
+      }
+    } else if (event.key === 'Escape') {
+      setOpen(false);
+    }
+  }
+
   return (
     <div className="global-search" ref={containerRef}>
       <input
@@ -88,21 +112,28 @@ export function GlobalSearch({ onSessionExpired }: { onSessionExpired: () => voi
         value={query}
         onChange={(event) => setQuery(event.target.value)}
         onFocus={() => { if (results.length > 0) setOpen(true); }}
+        onKeyDown={onKeyDown}
+        role="combobox"
+        aria-expanded={open}
+        aria-controls="global-search-listbox"
+        aria-activedescendant={highlightedIndex >= 0 ? `global-search-option-${highlightedIndex}` : undefined}
       />
 
       {open && (
-        <div className="global-search-results" role="listbox">
+        <div className="global-search-results" role="listbox" id="global-search-listbox">
           {loading && <div className="global-search-status">Searching…</div>}
           {!loading && results.length === 0 && query.trim().length >= MIN_QUERY_LENGTH && (
             <div className="global-search-status">No results.</div>
           )}
-          {results.map((result) => (
+          {results.map((result, index) => (
             <button
               key={`${result.entityType}:${result.entityId}`}
+              id={`global-search-option-${index}`}
               type="button"
               role="option"
-              aria-selected={false}
-              className="global-search-result"
+              aria-selected={index === highlightedIndex}
+              className={index === highlightedIndex ? 'global-search-result is-highlighted' : 'global-search-result'}
+              onMouseEnter={() => setHighlightedIndex(index)}
               onClick={() => openResult(result)}
             >
               <div className="card-head">

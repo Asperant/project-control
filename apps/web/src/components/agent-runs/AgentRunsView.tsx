@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { AgentRun, AgentRunListQuery, AgentValidationStatus, RoadmapMilestone } from '@project-control/contracts';
-import { ApiError, api } from '../../api-client';
+import { api } from '../../api-client';
 import { AgentRunDetail } from './AgentRunDetail';
+import { useApiErrorHandler } from '../../hooks/useApiErrorHandler';
+import { ErrorAlert } from '../ErrorAlert';
 
 export type RelatedOptions = { milestones: RoadmapMilestone[]; tasks: Array<{ id: string; title: string; milestoneId: string }> };
 
@@ -20,21 +22,12 @@ export function AgentRunsView({
   const [agentName, setAgentName] = useState('');
   const [validationStatus, setValidationStatus] = useState<AgentValidationStatus | 'all'>('all');
   const [showArchived, setShowArchived] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { error, setError, handleError } = useApiErrorHandler(onSessionExpired, 'The Agent Runs request failed.');
   const [busy, setBusy] = useState(false);
   const [showNewRun, setShowNewRun] = useState(false);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
 
   const writable = canWrite && !archived;
-
-  const handleError = useCallback((caught: unknown) => {
-    if (caught instanceof ApiError) {
-      if (caught.isAuthFailure) { onSessionExpired(); return; }
-      setError(caught.message);
-    } else {
-      setError('The Agent Runs request failed.');
-    }
-  }, [onSessionExpired]);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -106,7 +99,7 @@ export function AgentRunsView({
       </div>
 
       {archived && <div className="alert alert-warn" role="status">This project is archived. Agent Run changes are disabled.</div>}
-      {error && <div className="alert alert-error" role="alert">{error}</div>}
+      <ErrorAlert error={error?.message ?? null} requestId={error?.requestId ?? null} />
 
       {writable && showNewRun && (
         <NewAgentRunForm related={related} busy={busy} onCancel={() => setShowNewRun(false)} onSubmit={createRun} />
