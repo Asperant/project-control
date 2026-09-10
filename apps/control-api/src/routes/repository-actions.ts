@@ -65,6 +65,7 @@ export const repositoryActionRoutes = (ctx: AppContext): FastifyPluginAsync => a
         summary: entry.summary,
         actorUserId: request.auth!.user.id,
         actorKind: 'user',
+        requestId: request.id,
       },
       client,
     );

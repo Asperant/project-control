@@ -69,6 +69,15 @@ export type TimelineEntry = {
   summary: string;
   actorUserId?: string | null;
   actorKind: TimelineActorKind;
+  /**
+   * Correlation id for the request that produced this entry — parity with
+   * audit_events.request_id (0001), which exists so an operator can
+   * correlate a request across the API log and the audit trail. Not part of
+   * the public TimelineEntry contract/API response: like audit_events,
+   * this table has no public read-and-correlate surface, it's an
+   * operational field read by direct inspection, not shown in the UI.
+   */
+  requestId?: string | null;
 };
 
 const MAX_SUMMARY = 300;
@@ -92,8 +101,8 @@ export class TimelineLog {
     const executor = client ?? this.db;
     try {
       await executor.query(
-        `INSERT INTO timeline_events (project_id, entity_type, entity_id, event_type, summary, actor_user_id, actor_kind)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        `INSERT INTO timeline_events (project_id, entity_type, entity_id, event_type, summary, actor_user_id, actor_kind, request_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [
           entry.projectId,
           entry.entityType,
@@ -102,6 +111,7 @@ export class TimelineLog {
           entry.summary.slice(0, MAX_SUMMARY),
           entry.actorUserId ?? null,
           entry.actorKind,
+          entry.requestId ?? null,
         ],
       );
     } catch (error) {
@@ -115,8 +125,8 @@ export class TimelineLog {
    */
   async recordRequired(entry: TimelineEntry, client: DbClient): Promise<void> {
     await client.query(
-      `INSERT INTO timeline_events (project_id, entity_type, entity_id, event_type, summary, actor_user_id, actor_kind)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      `INSERT INTO timeline_events (project_id, entity_type, entity_id, event_type, summary, actor_user_id, actor_kind, request_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
         entry.projectId,
         entry.entityType,
@@ -125,6 +135,7 @@ export class TimelineLog {
         entry.summary.slice(0, MAX_SUMMARY),
         entry.actorUserId ?? null,
         entry.actorKind,
+        entry.requestId ?? null,
       ],
     );
   }

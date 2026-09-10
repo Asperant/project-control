@@ -59,6 +59,7 @@ export const workSessionRoutes = (ctx: AppContext): FastifyPluginAsync => async 
         summary: entry.summary,
         actorUserId: request.auth!.user.id,
         actorKind: 'user',
+        requestId: request.id,
       },
       client,
     );

@@ -253,6 +253,7 @@ export const projectRoutes =
         summary: `Project registered: "${created.project.name.slice(0, 100)}"`,
         actorUserId: userId,
         actorKind: 'user',
+        requestId: request.id,
       });
 
       const responseBody: ProjectResponse = {
@@ -325,6 +326,7 @@ export const projectRoutes =
         projectId: id, entityType: 'project', entityId: id, eventType: 'project.archived',
         summary: `Project archived: "${project.name.slice(0, 100)}"`,
         actorUserId: request.auth!.user.id, actorKind: 'user',
+        requestId: request.id,
       });
 
       const [technologies, rules, commands] = await Promise.all([
@@ -351,6 +353,7 @@ export const projectRoutes =
         projectId: id, entityType: 'project', entityId: id, eventType: 'project.reactivated',
         summary: `Project reactivated: "${project.name.slice(0, 100)}"`,
         actorUserId: request.auth!.user.id, actorKind: 'user',
+        requestId: request.id,
       });
 
       const [technologies, rules, commands] = await Promise.all([

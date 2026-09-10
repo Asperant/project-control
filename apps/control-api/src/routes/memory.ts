@@ -52,6 +52,7 @@ export const memoryRoutes = (ctx: AppContext): FastifyPluginAsync => async (app)
         summary: entry.summary,
         actorUserId: request.auth!.user.id,
         actorKind: 'user',
+        requestId: request.id,
       },
       client,
     );

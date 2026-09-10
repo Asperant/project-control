@@ -55,6 +55,7 @@ export const agentRunsRoutes = (ctx: AppContext): FastifyPluginAsync => async (a
         summary: entry.summary,
         actorUserId: request.auth!.user.id,
         actorKind: 'user',
+        requestId: request.id,
       },
       client,
     );

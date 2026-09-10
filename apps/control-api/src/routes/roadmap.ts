@@ -30,7 +30,7 @@ function ids(request:FastifyRequest):Record<string,string>{
 export const roadmapRoutes=(ctx:AppContext):FastifyPluginAsync=>async(app)=>{
   const requireAuth=createRequireAuth(ctx);const requireWriter=[requireAuth,requireRole('admin','operator')];
   const auditFor=(request:FastifyRequest):MutationAudit=>async(client,eventType,detail)=>ctx.audit.recordRequired({eventType:eventType as AuditEventType,outcome:'success',actorUserId:request.auth!.user.id,requestId:request.id,subject:`project:${String(detail['projectId'])}`,detail},client);
-  const timelineFor=(request:FastifyRequest):MutationTimeline=>async(client,entry)=>ctx.timeline.recordRequired({projectId:entry.projectId??null,entityType:entry.entityType as TimelineEntityType,entityId:entry.entityId,eventType:entry.eventType as TimelineEventType,summary:entry.summary,actorUserId:request.auth!.user.id,actorKind:'user'},client);
+  const timelineFor=(request:FastifyRequest):MutationTimeline=>async(client,entry)=>ctx.timeline.recordRequired({projectId:entry.projectId??null,entityType:entry.entityType as TimelineEntityType,entityId:entry.entityId,eventType:entry.eventType as TimelineEventType,summary:entry.summary,actorUserId:request.auth!.user.id,actorKind:'user',requestId:request.id},client);
   const roadmapReply=async(projectId:string)=>loadRoadmap(ctx.db,projectId);
   const detailReply=async(projectId:string,taskId:string)=>({detail:await loadTaskDetail(ctx.db,projectId,taskId)});
 

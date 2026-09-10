@@ -310,6 +310,7 @@ export const automationRoutes = (ctx: AppContext): FastifyPluginAsync => async (
       summary: `${run.workflowKey} ${run.status}: "${body.summary.slice(0, 90)}"`,
       actorUserId: null,
       actorKind: 'service',
+      requestId: request.id,
     });
 
     const responseBody: SettleWorkflowRunResponse = { run, notify };
