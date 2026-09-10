@@ -62,6 +62,11 @@ AUTOMATION
 VERIFICATION
   verify [--json]        Full functional verification.
   verify-security [--json]  Security posture verification.
+  release-manifest [--out FILE]
+                          Read-only JSON manifest: version, git commit, image
+                          digests, migration level, checkpoint-reader
+                          capability, runner version, backup/security status.
+                          See docs/release-checklist.md.
 
 MAINTENANCE
   update                 Back up, pull pinned images, migrate, health-gate.
@@ -138,6 +143,7 @@ case "$command" in
 
   verify)                 run_script verify.sh "$@" ;;
   verify-security)        run_script verify-security.sh "$@" ;;
+  release-manifest)       run_script release-manifest.sh "$@" ;;
 
   update)                 require_root_for update
                           run_script update.sh "$@" ;;
