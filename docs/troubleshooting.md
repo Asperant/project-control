@@ -181,7 +181,7 @@ runner's own mount namespace (not just declared so in a unit file):
 ```bash
 sudo -u project-runner true 2>/dev/null; \
 runner_pid="$(systemctl show -p MainPID --value project-control-runner.service)"; \
-sudo awk -v root="/home/asrin/Desktop" '$5 == root {print $6}' "/proc/${runner_pid}/mountinfo"
+sudo awk -v root="/home/<user>/Desktop" '$5 == root {print $6}' "/proc/${runner_pid}/mountinfo"
 # expect a comma-separated options field starting with "ro"
 ```
 

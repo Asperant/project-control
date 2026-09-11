@@ -23,7 +23,7 @@ Projects → New project → type the full folder path → Inspect
    folder's full path, e.g.
 
    ```
-   /home/asrin/Desktop/workspace/chicek-frontend-observability
+   /home/<user>/Desktop/workspace/my-app
    ```
 
    Type it exactly — the panel never browses the filesystem for you, and the
@@ -62,7 +62,7 @@ allowlist — `/srv/project-control/config/allowed-project-roots.conf` — that
 neither the web panel nor the Control API can modify. The initial default is:
 
 ```
-/home/asrin/Desktop
+/home/<user>/Desktop
 ```
 
 Adding a second root is a host-level change, not a panel setting:

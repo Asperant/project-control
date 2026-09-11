@@ -265,7 +265,7 @@ async function main(): Promise<void> {
     console.log(`Real control-api listening at ${address}`);
 
     const email = 'scale-pagination@example.test';
-    const password = 'a-secure-scale-pagination-password';
+    const password = 'regression-test-only';
     await harness.ctx.db.query(
       "INSERT INTO users(email,display_name,password_hash,role) VALUES($1,$2,$3,'admin')",
       [email, 'Scale Pagination Tester', await hashPassword(password)],

@@ -68,7 +68,7 @@ migration may or may not have already committed) are spelled out in
 
 **Projects → New project**, type the full folder path (it must be under a
 configured allowed root — `/srv/project-control/config/allowed-project-roots.conf`,
-default `/home/asrin/Desktop`), **Inspect** to see a read-only preview of
+default `/home/<user>/Desktop`), **Inspect** to see a read-only preview of
 detected git state, languages, frameworks and commands, edit anything, then
 **Save project** — nothing is written until that click. Re-inspect an
 existing project any time with its detail page's **Rescan** action, which

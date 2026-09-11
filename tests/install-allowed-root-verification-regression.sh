@@ -187,8 +187,8 @@ generate_dropin() {
     printf 'BindReadOnlyPaths=-%s\n' "$root"
   done
 }
-first_run="$(generate_dropin /home/asrin/Desktop)"
-second_run="$(generate_dropin /home/asrin/Desktop)"
+first_run="$(generate_dropin /home/user/Desktop)"
+second_run="$(generate_dropin /home/user/Desktop)"
 [[ "$first_run" == "$second_run" ]] \
   || fail "reinstall must regenerate a byte-identical drop-in for unchanged input"
 

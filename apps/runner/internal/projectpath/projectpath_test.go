@@ -42,7 +42,7 @@ func TestValidateRejectsExplicitTraversalSegment(t *testing.T) {
 	cases := []string{
 		root + "/p/../p",
 		root + "/../" + filepath.Base(root),
-		"/home/asrin/Desktop/../../etc/passwd",
+		"/home/user/Desktop/../../etc/passwd",
 	}
 	for _, input := range cases {
 		if _, err := Validate([]string{root}, input); !errors.Is(err, ErrTraversal) {

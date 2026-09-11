@@ -40,8 +40,8 @@ Commits from the panel (Development → Actions) are disabled for every project
 until explicitly opted in — see [repository-actions.md](repository-actions.md).
 
 ```bash
-sudo ./pcctl enable-repo-writes /home/asrin/Desktop/my-project
-sudo ./pcctl disable-repo-writes /home/asrin/Desktop/my-project
+sudo ./pcctl enable-repo-writes /home/<user>/Desktop/my-project
+sudo ./pcctl disable-repo-writes /home/<user>/Desktop/my-project
 ```
 
 Both are idempotent and re-verify their own effect (POSIX ACL grant, systemd

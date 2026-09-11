@@ -31,9 +31,9 @@ const inspectionBody = {
   expiresAt: '2026-08-04T22:00:00.000Z',
   scanVersion: '1',
   location: {
-    inputPath: '/home/asrin/Desktop/demo',
-    canonicalPath: '/home/asrin/Desktop/demo',
-    allowedRoot: '/home/asrin/Desktop',
+    inputPath: '/home/user/Desktop/demo',
+    canonicalPath: '/home/user/Desktop/demo',
+    allowedRoot: '/home/user/Desktop',
     accessible: true,
     checkedAt: '2026-08-04T10:00:00.000Z',
   },
@@ -64,12 +64,12 @@ const inspectionBody = {
 describe('project inspection', () => {
   it('posts the typed path to /api/projects/inspections', async () => {
     fetchMock.mockResolvedValue(jsonResponse(inspectionBody, { status: 201 }));
-    await api.inspectProject({ path: '/home/asrin/Desktop/demo' });
+    await api.inspectProject({ path: '/home/user/Desktop/demo' });
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('/api/projects/inspections');
     expect(init.method).toBe('POST');
-    expect(JSON.parse(init.body as string)).toEqual({ path: '/home/asrin/Desktop/demo' });
+    expect(JSON.parse(init.body as string)).toEqual({ path: '/home/user/Desktop/demo' });
     expect((init.headers as Record<string, string>)['x-csrf-token']).toBe('c'.repeat(43));
   });
 
@@ -156,7 +156,7 @@ describe('response validation', () => {
     fetchMock.mockResolvedValue(jsonResponse({ nonsense: true }, { status: 201 }));
     let error: ApiError | undefined;
     try {
-      await api.inspectProject({ path: '/home/asrin/Desktop/demo' });
+      await api.inspectProject({ path: '/home/user/Desktop/demo' });
     } catch (caught) {
       error = caught as ApiError;
     }

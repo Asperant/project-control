@@ -154,8 +154,8 @@ func ValidateWritable(allowedRoots, writeEnabled []string, rawInput string) (Res
 //  3. The allowed root itself is never accepted as a project.
 //  4. Containment is a component-wise check: canonical == root is rejected by
 //     (3), and otherwise canonical must start with root + separator. A bare
-//     string-prefix check would let "/home/asrin/Desktop-evil" be mistaken for
-//     a child of "/home/asrin/Desktop"; the separator makes that impossible.
+//     string-prefix check would let "/home/user/Desktop-evil" be mistaken for
+//     a child of "/home/user/Desktop"; the separator makes that impossible.
 func Validate(allowedRoots []string, rawInput string) (Result, error) {
 	if len(allowedRoots) == 0 {
 		return Result{}, ErrNoAllowedRoots

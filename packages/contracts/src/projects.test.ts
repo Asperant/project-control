@@ -8,8 +8,8 @@ import {
 
 describe('inspectProjectRequestSchema', () => {
   it('accepts an absolute-looking path', () => {
-    const parsed = inspectProjectRequestSchema.parse({ path: '/home/asrin/Desktop/workspace/demo' });
-    expect(parsed.path).toBe('/home/asrin/Desktop/workspace/demo');
+    const parsed = inspectProjectRequestSchema.parse({ path: '/home/user/Desktop/workspace/demo' });
+    expect(parsed.path).toBe('/home/user/Desktop/workspace/demo');
   });
 
   it('rejects an empty path rather than defaulting it', () => {

@@ -132,7 +132,7 @@ export function NewProjectFlow({
             <input
               id="project-path"
               type="text"
-              placeholder="/home/asrin/Desktop/workspace/my-project"
+              placeholder="/home/user/Desktop/workspace/my-project"
               value={path}
               disabled={inspecting}
               onChange={(e) => setPath(e.target.value)}

@@ -111,13 +111,13 @@ validate_root_line() {
 
 [[ "$(validate_root_line 'relative/path')" == "REJECTED-NOT-ABSOLUTE" ]] \
   || fail "a relative path must be rejected"
-[[ "$(validate_root_line '/home/asrin/../etc')" == "REJECTED-DOT-COMPONENT" ]] \
+[[ "$(validate_root_line '/home/user/../etc')" == "REJECTED-DOT-COMPONENT" ]] \
   || fail "a .. path component must be rejected"
-[[ "$(validate_root_line '/home/asrin/./Desktop')" == "REJECTED-DOT-COMPONENT" ]] \
+[[ "$(validate_root_line '/home/user/./Desktop')" == "REJECTED-DOT-COMPONENT" ]] \
   || fail "a . path component must be rejected"
-[[ "$(validate_root_line '/home/asrin/Desktop')" == "ACCEPTED:/home/asrin/Desktop" ]] \
+[[ "$(validate_root_line '/home/user/Desktop')" == "ACCEPTED:/home/user/Desktop" ]] \
   || fail "a well-formed absolute path must be accepted unchanged"
-[[ "$(validate_root_line '/home/asrin/does-not-exist-yet')" == "ACCEPTED:/home/asrin/does-not-exist-yet" ]] \
+[[ "$(validate_root_line '/home/user/does-not-exist-yet')" == "ACCEPTED:/home/user/does-not-exist-yet" ]] \
   || fail "a currently-nonexistent root must still be accepted (fail-closed at runtime, not at config time)"
 
 mkdir -p "${SCRATCH}/real-target"
@@ -142,16 +142,16 @@ generate_dropin() {
   done
 }
 
-single_dropin="$(generate_dropin /home/asrin/Desktop)"
-printf '%s\n' "$single_dropin" | grep -qE '^BindReadOnlyPaths=-/home/asrin/Desktop$' \
+single_dropin="$(generate_dropin /home/user/Desktop)"
+printf '%s\n' "$single_dropin" | grep -qE '^BindReadOnlyPaths=-/home/user/Desktop$' \
   || fail "single-root drop-in missing the expected BindReadOnlyPaths= line"
 [[ "$(printf '%s\n' "$single_dropin" | grep -c '^BindReadOnlyPaths=')" == "1" ]] \
   || fail "single-root drop-in must contain exactly one BindReadOnlyPaths= line"
 
-multi_dropin="$(generate_dropin /home/asrin/Desktop /home/asrin/Projects /mnt/data/shared)"
+multi_dropin="$(generate_dropin /home/user/Desktop /home/user/Projects /mnt/data/shared)"
 [[ "$(printf '%s\n' "$multi_dropin" | grep -c '^BindReadOnlyPaths=')" == "3" ]] \
   || fail "multi-root drop-in must contain one BindReadOnlyPaths= line per root"
-printf '%s\n' "$multi_dropin" | grep -qE '^BindReadOnlyPaths=-/home/asrin/Projects$' \
+printf '%s\n' "$multi_dropin" | grep -qE '^BindReadOnlyPaths=-/home/user/Projects$' \
   || fail "multi-root drop-in missing the second root"
 printf '%s\n' "$multi_dropin" | grep -qE '^BindReadOnlyPaths=-/mnt/data/shared$' \
   || fail "multi-root drop-in missing the third root"
@@ -164,7 +164,7 @@ for dropin_content in "$single_dropin" "$multi_dropin"; do
 done
 
 # Reinstall idempotency: identical input produces byte-identical output.
-[[ "$(generate_dropin /home/asrin/Desktop)" == "$single_dropin" ]] \
+[[ "$(generate_dropin /home/user/Desktop)" == "$single_dropin" ]] \
   || fail "regenerating the drop-in from the same input must be byte-identical (idempotent)"
 
 printf 'PASS: drop-in generation (single root, multiple roots, idempotent, no BindPaths=, no bare /home)\n'

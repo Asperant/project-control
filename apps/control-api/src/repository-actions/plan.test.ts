@@ -65,7 +65,7 @@ describe('classifyRisk', () => {
 
 describe('computeCommitFingerprint', () => {
   const base = {
-    canonicalPath: '/home/asrin/Desktop/demo', branch: 'main', headSha: sha, detached: false,
+    canonicalPath: '/home/user/Desktop/demo', branch: 'main', headSha: sha, detached: false,
     selectedPaths: ['README.md'], identities: [identity('README.md')],
   };
 
@@ -175,7 +175,7 @@ describe('computeCommitFingerprint', () => {
 
 describe('buildGitCommitPlan', () => {
   const baseInput = {
-    canonicalPath: '/home/asrin/Desktop/demo', branch: 'feature/x', detached: false, headSha: sha,
+    canonicalPath: '/home/user/Desktop/demo', branch: 'feature/x', detached: false, headSha: sha,
     defaultBranch: 'main', defaultBranchConfidence: 'known' as const,
     development: { files: [changedFile('README.md')] },
     request: { paths: ['README.md'], message: 'feat: update readme' },
