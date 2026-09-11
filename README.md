@@ -1,5 +1,7 @@
 # Project Memory & Development Control Center
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A self-hosted control plane for project memory and development operations,
 reachable **only** over a Tailscale tailnet. Nothing in this deployment is
 published to the public internet.
@@ -12,6 +14,26 @@ briefing, read-only development (Git) state, controlled repository actions,
 and global search with an activity timeline. `./pcctl verify` and
 `./pcctl verify-security` prove all of it is actually configured the way this
 document claims.
+
+**At a glance:**
+
+- **Project memory** — decisions, constraints, findings and handoffs, with a
+  supersede chain and immutable checkpoints so context survives between
+  sessions.
+- **Manual roadmap** — milestones, tasks, acceptance criteria and
+  dependencies; progress is always derived from task completion, never typed
+  in by hand.
+- **Agent-run archive** — a provenance record of what was actually sent to
+  an AI agent and what it reported back, kept separate from your own
+  verification of that work.
+- **Deterministic "Where was I?"** — a Resume briefing computed entirely
+  from stored facts, with no AI in the loop.
+- **Read-only Git visibility and controlled commits** — see a project's real
+  state, and optionally allow one audited, previewed `git.commit` path —
+  never push, merge, reset, or an arbitrary command.
+- **Verifiable hardening** — every security claim in
+  [docs/security-model.md](docs/security-model.md) is backed by a live,
+  automated check (`./pcctl verify-security`), not just a written promise.
 
 ---
 
