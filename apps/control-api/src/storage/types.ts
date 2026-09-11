@@ -3,7 +3,7 @@ import type { Readable } from 'node:stream';
 /**
  * Storage abstraction.
  *
- * Stage 1 ships exactly one implementation (`FilesystemArtifactStore`), but the
+ * This platform ships exactly one implementation (`FilesystemArtifactStore`), but the
  * interface is defined in terms a future S3/object-store adapter can satisfy:
  * content-addressed keys, streaming I/O, no filesystem paths in the signatures,
  * and no assumption that `exists` is cheap. That is the whole reason this file

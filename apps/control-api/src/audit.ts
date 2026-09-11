@@ -11,7 +11,7 @@ import type { Logger } from './logger.js';
 
 export type AuditOutcome = 'success' | 'failure' | 'denied' | 'error';
 
-/** Closed set of Stage 1 event types — new events are added deliberately. */
+/** Closed set of event types — new events are added deliberately. */
 export type AuditEventType =
   | 'auth.login.succeeded'
   | 'auth.login.failed'

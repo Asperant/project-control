@@ -1,9 +1,9 @@
 /* =============================================================================
    Project Control — operator panel styling.
 
-   Deliberately a single hand-written stylesheet: the Stage 1 panel is five
-   screens, and a CSS framework would add a large third-party surface to an
-   application whose whole point is a small, auditable attack surface.
+   Deliberately a single hand-written stylesheet: a CSS framework would add
+   a large third-party surface to an application whose whole point is a
+   small, auditable attack surface.
 
    Colours are defined once as tokens and mirrored for dark mode, which the
    panel follows from the OS rather than offering as a setting.

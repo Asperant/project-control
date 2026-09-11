@@ -2,8 +2,8 @@
   "name": "@project-control/web",
   "version": "1.0.0",
   "private": true,
-  "description": "Project Control — operator web panel (Stage 1 skeleton)",
-  "license": "UNLICENSED",
+  "description": "Project Control — operator web panel",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.app.json && tsc -p tsconfig.node.json && vite build",

@@ -63,7 +63,7 @@ async function authenticateSessionCookie(
 /**
  * Authentication and CSRF enforcement, applied as a single preHandler.
  *
- * Cookie-only, exactly as Stage 1 shipped it. Every route file except the new
+ * Cookie-only, exactly as originally shipped. Every route file except the new
  * automation surface uses this, and it never looks at an Authorization
  * header — which is what makes "a Bearer token is rejected on every route
  * that has not opted into `resolvePrincipal`" true without a single explicit
@@ -76,7 +76,7 @@ export function createRequireAuth(ctx: AppContext) {
   };
 }
 
-/** Role gate, applied after `requireAuth`. Stage 1 uses it only for admin ops. */
+/** Role gate, applied after `requireAuth`. Used only for admin/operator ops. */
 export function requireRole(...roles: Array<'admin' | 'operator' | 'viewer'>) {
   return async function roleGuard(request: FastifyRequest): Promise<void> {
     const role = request.auth?.user.role;

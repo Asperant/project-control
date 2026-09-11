@@ -20,7 +20,7 @@ source "${PCCTL_DIR}/scripts/lib/common.sh"
 
 usage() {
   cat >&2 <<'PCCTL_USAGE'
-Project Control — Stage 1
+Project Control
 
 USAGE
   ./pcctl <command> [options]

@@ -286,7 +286,7 @@ func runnerSelfTest(cfg Config) registry.Handler {
 		record("no_docker_socket_access", !dockerReachable,
 			"runner cannot open the Docker socket")
 
-		// --- 7. Registry contains only the declared Stage 1 operations --------
+		// --- 7. Registry contains only the declared operations -----------------
 		record("operation_registry_closed", true,
 			"operations are compiled in; no runtime registration path exists")
 

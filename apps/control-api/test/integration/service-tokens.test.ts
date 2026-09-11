@@ -300,8 +300,8 @@ describe.skipIf(!hasDocker)('service identity', () => {
     // all, so they are already unreachable by a service token — adding the
     // gate there would be dead code with no route ever setting
     // request.principal for it to inspect. The property this test actually
-    // guards is what P2 of the automation plan reduces to: `requireRole`,
-    // untouched since Stage 1, reads request.auth (never set for a service
+    // guards is that `requireRole`, unchanged since it was first written,
+    // reads request.auth (never set for a service
     // principal — see resolvePrincipal), so the day any existing route is
     // ever switched from requireAuth to resolvePrincipal for read access,
     // its *existing* requireRole call keeps denying a service principal

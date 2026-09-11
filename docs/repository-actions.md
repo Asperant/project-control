@@ -1,7 +1,7 @@
 # Repository Actions
 
 Repository Actions is this platform's first write path into a registered
-project's own repository. Everything else in Stage 1 — project registration,
+project's own repository. Everything else — project registration,
 Development State, checkpoints, Work Sessions — reads a project; Repository
 Actions is the one place the platform ever changes one, and it does so through
 a fixed lifecycle: **plan → confirm+execute → verify → settle**, with every
@@ -39,8 +39,8 @@ mount table, not just by reading the config file.
 An operator opts a specific, already-registered project in with:
 
 ```
-sudo ./pcctl enable-repo-writes /home/asrin/Desktop/my-project
-sudo ./pcctl disable-repo-writes /home/asrin/Desktop/my-project
+sudo ./pcctl enable-repo-writes /home/<user>/Desktop/my-project
+sudo ./pcctl disable-repo-writes /home/<user>/Desktop/my-project
 ```
 
 `enable-repo-writes`:

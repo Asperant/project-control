@@ -9,7 +9,7 @@ import { readSecretFile } from '../secrets.js';
 /**
  * Interactive bootstrap of the first administrator.
  *
- * This is the *only* way an account comes into existence in Stage 1. There is no
+ * This is the *only* way an account comes into existence. There is no
  * seeded user, no default password, and no environment variable that creates
  * one — so a deployment that is installed but never bootstrapped has no
  * credentials to guess.

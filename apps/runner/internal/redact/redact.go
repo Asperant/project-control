@@ -1,7 +1,7 @@
 // Package redact removes credential-shaped substrings from text before it is
 // logged or returned to a caller.
 //
-// This is a safety net, not the primary control: the Stage 1 operations do not
+// This is a safety net, not the primary control: today's operations do not
 // read secrets at all. It exists because operation output is the natural place
 // for a future operation to accidentally surface an environment variable or a
 // connection string, and a net that is already in place cannot be forgotten.

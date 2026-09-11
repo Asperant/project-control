@@ -1,10 +1,10 @@
 # Manual checkpoints
 
-Exactly five steps in Stage 1 need a human. Each one requires either a browser
+Exactly five steps need a human. Each one requires either a browser
 consent flow or a secret that must not be machine-generated. Everything else is
 automated.
 
-Until all five are complete, **Stage 1 is not fully delivered**. `./pcctl status`
+Until all five are complete, **the deployment is not fully delivered**. `./pcctl status`
 lists which remain.
 
 ---

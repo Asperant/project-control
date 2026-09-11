@@ -32,7 +32,7 @@ log_step "1/9  Preflight"
 # different port — a silently relocated portal is worse than a failed install.
 if ! bash "${PC_SCRIPTS_DIR}/preflight.sh" >/dev/null 2>&1; then
   log_error "preflight reported blocking issues"
-  log_info  "review reports/stage1-preflight.md, resolve them, then re-run"
+  log_info  "review reports/preflight-report.md, resolve them, then re-run"
   bash "${PC_SCRIPTS_DIR}/preflight.sh" 2>&1 | grep -E '^\[ FAIL\]' || true
   exit 1
 fi
@@ -250,10 +250,10 @@ chown root:root "$STACK_ENV"
 # folders under — the entire "allowed roots" mechanism for project
 # registration. Web panel and Control API never write this file; it is
 # managed here and directly by an operator with root access. Preserved
-# verbatim on every reinstall; only created (with the Stage default) the
-# first time this host is installed.
+# verbatim on every reinstall; only created, with a placeholder the operator
+# must edit before it is usable, the first time this host is installed.
 ALLOWED_ROOTS_FILE="${PC_ROOT}/config/allowed-project-roots.conf"
-DEFAULT_ALLOWED_ROOT="/home/asrin/Desktop"
+DEFAULT_ALLOWED_ROOT="/home/<user>/Desktop"
 
 if [[ ! -f "$ALLOWED_ROOTS_FILE" ]]; then
   tmp_roots="$(mktemp)"
@@ -605,7 +605,7 @@ $(printf '═%.0s' {1..70})
   Compose project : ${PC_COMPOSE_PROJECT}
   Stack version   : ${PC_STACK_VERSION}
 
-  REMAINING MANUAL CHECKPOINTS — Stage 1 is not complete until all are done:
+  REMAINING MANUAL CHECKPOINTS — the deployment is not complete until all are done:
 
     1. sudo ./pcctl configure-tailscale     Tailscale login + HTTPS
     2. sudo ./pcctl create-admin            First administrator account

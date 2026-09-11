@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# verify-security.sh — asserts the security posture that Stage 1 claims.
+# verify-security.sh — asserts the security posture this platform claims.
 #
 #   ./pcctl verify-security [--json]
 #

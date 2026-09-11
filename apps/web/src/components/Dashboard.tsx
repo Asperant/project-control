@@ -146,7 +146,7 @@ function SignOutButton({ onSignedOut }: { onSignedOut: () => void }): React.JSX.
   );
 }
 
-/** The original Stage 1 system-health view, unchanged apart from losing its own header/sign-out (now shared above). */
+/** The original system-health view, unchanged apart from losing its own header/sign-out (now shared above). */
 function SystemPanel({
   session,
   onSessionExpired,

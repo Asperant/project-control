@@ -220,7 +220,6 @@ done
 
 if restic backup \
       --tag "project-control" \
-      --tag "stage1" \
       --tag "run:${RUN_ID}" \
       --host "$(hostname -s)" \
       "${EXCLUDES[@]}" \

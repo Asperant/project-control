@@ -551,7 +551,7 @@ services:
       EXTERNAL_FRONTEND_HOOKS_URLS: ""
 
       # --- Surface reduction -------------------------------------------------
-      # The public REST API is disabled: Stage 1 has no consumer for it, and it
+      # The public REST API is disabled: nothing in this platform consumes it, and it
       # would be an authentication surface reachable through the same port.
       N8N_PUBLIC_API_DISABLED: "true"
       N8N_PUBLIC_API_SWAGGERUI_DISABLED: "true"

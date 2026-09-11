@@ -168,9 +168,9 @@ if [[ -n "$(container_id postgres)" ]] && is_root; then
 
   tables="$(psql_super project_control "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('users','sessions','audit_events','schema_migrations','system_settings','artifact_objects')" || echo 0)"
   if [[ "${tables:-0}" == "6" ]]; then
-    record_check PASS PG-005 "All six Stage 1 tables exist" ""
+    record_check PASS PG-005 "All six foundation tables exist" ""
   else
-    record_check FAIL PG-005 "Expected 6 Stage 1 tables, found ${tables}" ""
+    record_check FAIL PG-005 "Expected 6 foundation tables, found ${tables}" ""
   fi
 
   project_tables="$(psql_super project_control "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('projects','project_technologies','project_rules','project_commands','project_inspections')" || echo 0)"

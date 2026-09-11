@@ -234,7 +234,7 @@ describe.skipIf(!hasDocker)('artifacts, roles and health', () => {
 
   // ---------------------------------------------------------------------------
   describe('system status', () => {
-    it('reports every Stage 1 component', async () => {
+    it('reports every core component', async () => {
       const { token } = await authenticate();
       const response = await harness.app.inject({
         method: 'GET', url: '/api/system/status', cookies: { pc_session: token },

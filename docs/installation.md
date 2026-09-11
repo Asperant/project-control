@@ -120,7 +120,7 @@ chmod +x pcctl
 ./pcctl preflight
 ```
 
-Read-only. Writes `reports/stage1-preflight.md`. It must report **READY** before
+Read-only. Writes `reports/preflight-report.md`. It must report **READY** before
 you continue.
 
 A port conflict on 443, 8443, 5678 or 8780 is reported as a failure and is
