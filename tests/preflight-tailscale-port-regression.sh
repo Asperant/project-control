@@ -105,9 +105,12 @@ EOF
 
 chmod +x "${FAKE_BIN}/ss" "${FAKE_BIN}/tailscale"
 
-# Default tailnet addresses used by every scenario unless overridden.
-TS_IP4="REDACTED-TAILSCALE-IP"
-TS_IP6="REDACTED-TAILSCALE-IPV6"
+# Default tailnet addresses used by every scenario unless overridden. Any
+# address in Tailscale's CGNAT range (100.64.0.0/10) and its fixed IPv6 ULA
+# prefix (fd7a:115c:a1e0::/48, the same for every tailnet) is a valid fake —
+# these are not a real device's addresses.
+TS_IP4="100.64.1.23"
+TS_IP6="fd7a:115c:a1e0::1234:5678"
 LAN_IP="192.168.1.50"
 
 fmt_addr() {
