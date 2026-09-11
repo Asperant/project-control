@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    name: TypeScript (typecheck, test, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable corepack (pins the exact pnpm version from package.json)
+        run: corepack enable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.18.0"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages/contracts
+        # apps/control-api and apps/web depend on this workspace package's
+        # build output for type resolution; the -r scripts below assume it.
+        run: pnpm --filter @project-control/contracts build
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        # Includes apps/control-api's PostgreSQL-backed integration suite,
+        # which spins up disposable containers via the Docker daemon the
+        # runner already provides — no extra service container needed.
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+  runner:
+    name: Go runner (build, vet, test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+  shell:
+    name: Shell scripts (syntax)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: bash -n every shipped and test script
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS= read -r -d '' f; do
+            bash -n "$f" || { echo "SYNTAX ERROR: $f"; fail=1; }
+          done < <(find scripts tests -name '*.sh' -print0)
+          bash -n pcctl || { echo "SYNTAX ERROR: pcctl"; fail=1; }
+          exit "$fail"
+
+  secrets:
+    name: Secret scan (tracked files)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the project's own secret scanner
+        run: |
+          set -euo pipefail
+          candidates=""
+          while IFS= read -r file; do
+            [[ -f "$file" ]] || continue
+            case "$file" in
+              *.md|scripts/verify-security.sh|*/redact*|*.test.ts|*_test.go) continue ;;
+            esac
+            candidates+="${file}"$'\n'
+          done < <(git ls-files)
+          findings="$(printf '%s' "$candidates" | python3 scripts/lib/secret-scan.py . || true)"
+          if [[ -n "$findings" ]]; then
+            echo "Possible secret-shaped literal(s) found:"
+            echo "$findings"
+            exit 1
+          fi
+          echo "clean"
