@@ -188,7 +188,7 @@ assert_flagged "token.ts" "token-shaped literal"
 #     -> FLAGGED
 # -----------------------------------------------------------------------------
 chunk1="a1b2c3d4e5f6g7h8i9j0"
-chunk2="C1a2b3c4d5e"
+chunk2="k1l2m3n4o5p6q7r8s9t0"
 write "apikey.ts" "apiKey: \"${chunk1}${chunk2}\""
 assert_flagged "apikey.ts" "generic API-key-shaped literal"
 
