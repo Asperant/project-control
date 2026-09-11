@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "description": "Runtime-validated API contracts shared by the Control API and the web panel",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
