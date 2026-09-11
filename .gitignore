@@ -17,6 +17,10 @@ tests/tmp/
 # Local toolchains fetched by scripts
 .toolchain/
 
+# Python bytecode cache (scripts/lib has a couple of .py helpers)
+__pycache__/
+*.pyc
+
 # -----------------------------------------------------------------------------
 # SECRETS — never commit. Only *.example files belong in this repository.
 # -----------------------------------------------------------------------------
@@ -38,6 +42,10 @@ rclone.conf
 *.log
 logs/
 *.sock
+
+# Generated, host-specific reports (preflight, etc.) — never commit; these
+# capture real local paths, hostnames and network details for this host.
+reports/
 
 # Editor / OS
 .DS_Store

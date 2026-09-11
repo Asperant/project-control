@@ -145,9 +145,8 @@ flow this release touches, at minimum:
   confirmation step.
 
 This is `docs/quality-gates.md`'s own UI checklist — run it in full for
-whatever surface changed. If the release ships a feature with its own
-acceptance runbook (the model is `docs/automation-acceptance.md` and
-`docs/search-timeline-acceptance.md`: numbered steps, an "Expected:" for
+whatever surface changed. If the release ships a feature large enough to
+warrant its own acceptance runbook (numbered steps, an "Expected:" for
 each, a summary table), run that runbook's browser-driven steps here too;
 do not re-invent a parallel checklist for a feature that already has one.
 

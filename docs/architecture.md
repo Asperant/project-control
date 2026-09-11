@@ -93,8 +93,7 @@ via a generated, stored `tsvector` column and a GIN index (`projects`,
 `work_sessions`) — it does not read `timeline_events` at all. `GET
 /api/search` (`apps/control-api/src/search/store.ts`) unions a
 `ts_headline`-derived excerpt from each table and never returns more than a
-caller could already see through that entity's own endpoint. See
-[search-timeline-acceptance.md](search-timeline-acceptance.md).
+caller could already see through that entity's own endpoint.
 
 On the frontend, this feature also introduced the panel's first client-side
 router (`react-router-dom`'s `BrowserRouter`, wired in `apps/web/src/main.tsx`)
@@ -428,8 +427,7 @@ each of the eight tables full-text search covers (`projects`,
 `project_checkpoints`, `agent_runs`, `agent_run_prompts`, `agent_reports`,
 `work_sessions`). No new grants were needed for `0021`: `control_app` already
 had `SELECT` on every table involved, and a generated column is populated by
-`control_migrator`'s own `INSERT`/`UPDATE`, not a separate write path. See
-[search-timeline-acceptance.md](search-timeline-acceptance.md).
+`control_migrator`'s own `INSERT`/`UPDATE`, not a separate write path.
 
 Development State adds no table or migration. Live Git metadata is not cached
 in PostgreSQL; only compact Git state is persisted inside new immutable

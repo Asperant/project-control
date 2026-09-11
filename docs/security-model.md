@@ -307,7 +307,7 @@ content that looks like a secret is ever read, stored, or returned.**
 `config/allowed-project-roots.conf` is root-owned (`0644`), non-secret, and
 written only by `scripts/install.sh` or a root operator editing it directly —
 never by the web panel or the Control API, which have no write access to it at
-all. The default on a fresh install is `/home/asrin/Desktop`; adding a second
+all. The default on a fresh install is `/home/<user>/Desktop`; adding a second
 root is a one-line edit followed by `sudo ./pcctl install` (idempotent),
 which regenerates the systemd exception below and restarts the runner.
 
@@ -355,8 +355,8 @@ Every project-registration operation passes through one function,
 6. Containment is a **path-component** check: `canonical == root` is already
    rejected by (5), and otherwise `canonical` must start with `root +
    separator`. A bare string prefix (`strings.HasPrefix(canonical, root)`
-   with no separator) would let `/home/asrin/Desktop-evil` be mistaken for a
-   child of `/home/asrin/Desktop`; the separator makes that impossible.
+   with no separator) would let `/home/<user>/Desktop-evil` be mistaken for a
+   child of `/home/<user>/Desktop`; the separator makes that impossible.
 
 `WithinRoot` (`internal/projectpath/projectpath.go`) implements that same
 path-component containment check as a standalone function, exercised
@@ -629,8 +629,7 @@ before any frontend code rendered a snippet: `search/store.ts` uses
 control-character match markers instead of `<b>`/`</b>`, parses the result
 into `{ text, matched }` segments server-side, and the contract
 (`SearchSnippetSegment`) only ever carries those segments — never an HTML
-string. The frontend renders them as plain React text nodes. See
-[search-timeline-acceptance.md](search-timeline-acceptance.md#14-a-security-fix-made-along-the-way).
+string. The frontend renders them as plain React text nodes.
 
 ---
 
@@ -778,8 +777,8 @@ exactly two places: this function, and test fixtures using `mkdtempSync`.
 
 **Runner escape — 3 of 4 vectors closed with direct evidence; 1 narrow,
 real gap, now corrected in §11 and the risk registry rather than left as an
-overclaim.** Sibling-root bypass (`/home/asrin/Desktop-evil` vs.
-`/home/asrin/Desktop`) is closed by the separator-suffix containment check
+overclaim.** Sibling-root bypass (`/home/<user>/Desktop-evil` vs.
+`/home/<user>/Desktop`) is closed by the separator-suffix containment check
 (`projectpath.go:194`) and explicit `..`-segment rejection
 (`projectpath.go:169-173`). Symlinked directory entries during a manifest
 scan are closed by `internal/detect`'s lstat-derived `IsDir()`/mode-bit

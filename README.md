@@ -163,7 +163,6 @@ upstream registry. No `latest`, no floating tag, no `^` or `~` in any manifest.
 | [repository-actions.md](docs/repository-actions.md) | Controlled, previewed repository commits: plan → confirm → execute → verify |
 | [service-accounts.md](docs/service-accounts.md) | Machine (Bearer token) identity for automation callers: scope, minting, closed-by-default routing |
 | [automation.md](docs/automation.md) | n8n workflow runs: manifest, claim/settle lifecycle, idempotency, notification policy |
-| [automation-acceptance.md](docs/automation-acceptance.md) | Live acceptance runbook run against production for the automation feature |
 | [production-handoff.md](docs/production-handoff.md) | Task-oriented index for an operator: install, update, rollback, recover, backup, restore and every project screen, one paragraph each with a link to full depth |
 | [installation.md](docs/installation.md) | Clean-machine install on Ubuntu 22.04 |
 | [manual-checkpoints.md](docs/manual-checkpoints.md) | The five steps that need a human |
@@ -172,8 +171,6 @@ upstream registry. No `latest`, no floating tag, no `^` or `~` in any manifest.
 | [update-rollback.md](docs/update-rollback.md) | Update flow, health gate, rollback |
 | [disaster-recovery.md](docs/disaster-recovery.md) | Host failure, database failure, a bad deployment, a broken runner, a missing image, a failed backup |
 | [troubleshooting.md](docs/troubleshooting.md) | Symptom → diagnosis → fix |
-| [search-timeline-acceptance.md](docs/search-timeline-acceptance.md) | Live acceptance runbook for global search, the activity timeline and client-side routing |
-| [stage1-acceptance.md](docs/stage1-acceptance.md) | Foundation acceptance criteria and how each is proven |
 | [project-map.md](docs/project-map.md) | Where each concern lives in the repository, and which areas are high-risk to change |
 | [quality-gates.md](docs/quality-gates.md) | Commands to run before calling any change complete |
 | [release-checklist.md](docs/release-checklist.md) | The eleven gates a release must clear, and what `./pcctl release-manifest` answers for each |
