@@ -56,6 +56,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
+          cache-dependency-path: apps/runner/go.mod
 
       - name: Build
         run: go build ./...
