@@ -213,4 +213,4 @@ upstream registry. No `latest`, no floating tag, no `^` or `~` in any manifest.
 
 ## Licence
 
-Unlicensed / private.
+[MIT](LICENSE).
